@@ -6,11 +6,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # Playwright + Chromium with all system deps
-RUN npx -y playwright@1.50.1 install --with-deps chromium
+RUN mkdir -p /opt/playwright && cd /opt/playwright && npm init -y && npm install playwright@1.50.1 && npx playwright install --with-deps chromium
 
 # Screenshot helper
-COPY screenshot.js /usr/local/bin/screenshot.js
-RUN chmod +x /usr/local/bin/screenshot.js
+COPY screenshot.js /opt/playwright/screenshot.js
 
 WORKDIR /workspace
 CMD ["sleep", "infinity"]

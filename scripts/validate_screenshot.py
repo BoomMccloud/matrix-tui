@@ -22,7 +22,7 @@ SANDBOX_IMAGE = "matrix-agent-sandbox:latest"
 CONTAINER_NAME = "validate-screenshot-test"
 HOST_PORT = 18081
 CONTAINER_PORT = 8080
-HOST_OUTPUT = "/tmp/validate_screenshot.png"
+HOST_OUTPUT = "/private/tmp/validate_screenshot.png"
 
 
 def run(cmd: list[str], *, check: bool = True) -> str:
@@ -108,7 +108,7 @@ def main():
     try:
         run([
             "podman", "exec", CONTAINER_NAME,
-            "node", "/usr/local/bin/screenshot.js",
+            "node", "/opt/playwright/screenshot.js",
             f"http://localhost:{CONTAINER_PORT}",
             "/tmp/screenshot.png",
         ])
