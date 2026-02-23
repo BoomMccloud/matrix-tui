@@ -36,15 +36,13 @@ class Bot:
     async def _on_invite(self, room, event):
         """Join room on invite. No container yet — that happens on first message."""
         if not self._synced:
+            log.info("_on_invite SKIPPED (pre-sync) for %s by %s", room.room_id, event.sender)
             return
-        log.info("Invited to %s by %s", room.room_id, event.sender)
-        await self._join_and_greet(room.room_id)
-
-    async def _join_and_greet(self, room_id: str):
-        await self.client.join(room_id)
+        log.info("_on_invite FIRED for %s by %s", room.room_id, event.sender)
+        await self.client.join(room.room_id)
         await self.client.room_send(
-            room_id, "m.room.message",
-            {"msgtype": "m.text", "body": "Ready! Send me a task to get started."},
+            room.room_id, "m.room.message",
+            {"msgtype": "m.text", "body": "[invite] Ready! Send me a task to get started."},
         )
 
     async def _on_message(self, room, event):
@@ -145,7 +143,7 @@ class Bot:
 
         # Auto-join pending invites from before startup (no greeting — stale invites)
         for room_id in list(self.client.invited_rooms):
-            log.info("Joining pending invite for %s", room_id)
+            log.info("catch-up join (no greeting) for %s", room_id)
             await self.client.join(room_id)
 
         await self._reconnect_containers()
