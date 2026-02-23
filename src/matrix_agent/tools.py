@@ -64,6 +64,28 @@ TOOL_SCHEMAS = [
     {
         "type": "function",
         "function": {
+            "name": "code",
+            "description": (
+                "Delegate a coding or analysis task to Gemini CLI (1M token context). "
+                "Use this for writing new code, bug fixes, refactoring, code review, "
+                "and explaining how a codebase works. Gemini can read entire repos at once. "
+                "The task is passed safely without shell escaping issues."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "task": {
+                        "type": "string",
+                        "description": "What to code, analyze, or explain. Be specific about files and goals.",
+                    },
+                },
+                "required": ["task"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "take_screenshot",
             "description": "Take a browser screenshot of a URL accessible from inside the container. Use this after starting a web server to see the result.",
             "parameters": {
@@ -108,6 +130,17 @@ async def execute_tool(
         if len(result) > 10000:
             result = result[:10000] + "\n... (truncated)"
         return result, None
+
+    if name == "code":
+        rc, stdout, stderr = await sandbox.code(chat_id, args["task"])
+        output = stdout
+        if stderr:
+            output += f"\nSTDERR:\n{stderr}"
+        if rc != 0:
+            output += f"\n[exit code: {rc}]"
+        if len(output) > 10000:
+            output = output[:10000] + "\n... (truncated)"
+        return output, None
 
     if name == "take_screenshot":
         img = await sandbox.screenshot(chat_id, args["url"])

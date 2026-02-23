@@ -11,5 +11,8 @@ RUN mkdir -p /opt/playwright && cd /opt/playwright && npm init -y && npm install
 # Screenshot helper
 COPY screenshot.js /opt/playwright/screenshot.js
 
+# Gemini CLI coding agent
+RUN npm install -g @google/gemini-cli
+
 WORKDIR /workspace
 CMD ["sleep", "infinity"]

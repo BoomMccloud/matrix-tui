@@ -42,9 +42,14 @@ class SandboxManager:
         if chat_id in self._containers:
             return self._containers[chat_id]
 
+        env_flags: list[str] = []
+        if self.settings.gemini_api_key:
+            env_flags += ["-e", f"GEMINI_API_KEY={self.settings.gemini_api_key}"]
+
         rc, out, err = await self._run(
             "run", "-d",
             "--shm-size=256m",
+            *env_flags,
             self.image,
             "sleep", "infinity",
         )
@@ -133,6 +138,17 @@ class SandboxManager:
         await self._run("stop", cid, timeout=15)
         await self._run("rm", "-f", cid, timeout=15)
         log.info("Destroyed container %s for chat %s", cid[:12], chat_id)
+
+    async def code(self, chat_id: str, task: str) -> tuple[int, str, str]:
+        """Run Gemini CLI on a task. Task is passed as a direct argv argument (no shell escaping needed)."""
+        cid = self._containers.get(chat_id)
+        if not cid:
+            raise RuntimeError(f"No container for chat {chat_id}")
+        return await self._run(
+            "exec", cid,
+            "gemini", "-p", task,
+            timeout=self.settings.coding_timeout_seconds,
+        )
 
     async def destroy_all(self) -> None:
         for chat_id in list(self._containers):

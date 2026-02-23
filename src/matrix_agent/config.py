@@ -12,5 +12,7 @@ class Settings(BaseSettings):
     podman_path: str = "podman"
     sandbox_image: str = "matrix-agent-sandbox:latest"
     command_timeout_seconds: int = 120
+    coding_timeout_seconds: int = 1800
     max_agent_turns: int = 25
     screenshot_script: str = "/opt/playwright/screenshot.js"
+    gemini_api_key: str = ""
