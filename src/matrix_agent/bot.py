@@ -38,9 +38,12 @@ class Bot:
         if not self._synced:
             return
         log.info("Invited to %s by %s", room.room_id, event.sender)
-        await self.client.join(room.room_id)
+        await self._join_and_greet(room.room_id)
+
+    async def _join_and_greet(self, room_id: str):
+        await self.client.join(room_id)
         await self.client.room_send(
-            room.room_id, "m.room.message",
+            room_id, "m.room.message",
             {"msgtype": "m.text", "body": "Ready! Send me a task to get started."},
         )
 
@@ -140,8 +143,8 @@ class Bot:
 
         await self.client.sync(timeout=10000)
 
-        # Auto-join pending invites from before startup
-        for room_id, room in self.client.invited_rooms.items():
+        # Auto-join pending invites from before startup (no greeting — stale invites)
+        for room_id in list(self.client.invited_rooms):
             log.info("Joining pending invite for %s", room_id)
             await self.client.join(room_id)
 
