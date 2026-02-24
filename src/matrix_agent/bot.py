@@ -2,7 +2,9 @@
 
 import asyncio
 import io
+import json
 import logging
+import os
 
 from nio import (
     AsyncClient,
@@ -105,7 +107,9 @@ class Bot:
             {"msgtype": "m.text", "body": "⏳ Working on it..."},
         )
 
+        container_name = self.sandbox._containers.get(room_id)
         typing_task = asyncio.create_task(self._keep_typing(room_id))
+        ipc_task = asyncio.create_task(self._watch_ipc(room_id, container_name)) if container_name else None
         try:
             async for reply_text, image in self.agent.handle_message(room_id, text):
                 if image:
@@ -122,6 +126,8 @@ class Bot:
                 {"msgtype": "m.text", "body": f"Error: {e}"},
             )
         finally:
+            if ipc_task:
+                ipc_task.cancel()
             typing_task.cancel()
             await self.client.room_typing(room_id, typing=False)
 
@@ -148,6 +154,29 @@ class Bot:
         if task := self._workers.pop(room_id, None):
             task.cancel()
         self._queues.pop(room_id, None)
+
+    async def _watch_ipc(self, room_id: str, container_name: str) -> None:
+        """Poll for IPC sentinel file and send Matrix notification when found."""
+        ipc_file = os.path.join(
+            self.settings.ipc_base_dir, container_name, "needs_input.json"
+        )
+        try:
+            while True:
+                await asyncio.sleep(1)
+                if os.path.exists(ipc_file):
+                    try:
+                        with open(ipc_file) as f:
+                            data = json.load(f)
+                        prompt = data.get("prompt", "input required")
+                    except Exception:
+                        prompt = "input required"
+                    os.unlink(ipc_file)
+                    await self.client.room_send(
+                        room_id, "m.room.message",
+                        {"msgtype": "m.text", "body": f"⚠️ Agent needs input: {prompt}"},
+                    )
+        except asyncio.CancelledError:
+            pass
 
     async def _keep_typing(self, room_id: str) -> None:
         """Send typing indicator every 20s until cancelled."""

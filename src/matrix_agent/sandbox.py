@@ -5,6 +5,7 @@ import json
 import logging
 import os
 import re
+import shutil
 import tempfile
 
 from .config import Settings
@@ -110,6 +111,9 @@ class SandboxManager:
 
         name = _container_name(chat_id)
 
+        ipc_host = os.path.join(self.settings.ipc_base_dir, name)
+        os.makedirs(ipc_host, exist_ok=True)
+
         env_flags: list[str] = []
         if self.settings.gemini_api_key:
             env_flags += ["-e", f"GEMINI_API_KEY={self.settings.gemini_api_key}"]
@@ -118,6 +122,7 @@ class SandboxManager:
             "run", "-d",
             "--name", name,
             "--shm-size=256m",
+            "-v", f"{ipc_host}:/workspace/.ipc:Z",
             *env_flags,
             self.image,
             "sleep", "infinity",
@@ -182,7 +187,7 @@ This file is your instruction set. It is loaded automatically on every invocatio
 - One line per task, no multi-line entries
 """)
 
-        # AfterAgent hook — appends to status.md unconditionally after every Gemini session
+        # AfterAgent + UserInputRequired hooks
         await write("/workspace/.gemini/settings.json", """\
 {
   "hooks": {
@@ -193,6 +198,18 @@ This file is your instruction set. It is loaded automatically on every invocatio
             "name": "append-status",
             "type": "command",
             "command": "/workspace/.gemini/hooks/after-agent.sh",
+            "timeout": 5000
+          }
+        ]
+      }
+    ],
+    "UserInputRequired": [
+      {
+        "hooks": [
+          {
+            "name": "notify-matrix",
+            "type": "command",
+            "command": "/workspace/.gemini/hooks/user-input-required.sh",
             "timeout": 5000
           }
         ]
@@ -212,10 +229,20 @@ echo "[$timestamp] Gemini session completed" >> /workspace/status.md
 echo '{"continue": true}'
 """)
 
-        # Make hook executable
+        await write("/workspace/.gemini/hooks/user-input-required.sh", """\
+#!/bin/sh
+# UserInputRequired hook — writes sentinel file to IPC dir for host watcher.
+input=$(cat)
+echo "$input" > /workspace/.ipc/needs_input.json
+echo '{"continue": true}'
+""")
+
+        # Make hooks executable
         await self._run(
             "exec", container_name,
-            "chmod", "+x", "/workspace/.gemini/hooks/after-agent.sh",
+            "chmod", "+x",
+            "/workspace/.gemini/hooks/after-agent.sh",
+            "/workspace/.gemini/hooks/user-input-required.sh",
         )
 
     async def exec(self, chat_id: str, command: str) -> tuple[int, str, str]:
@@ -292,6 +319,8 @@ echo '{"continue": true}'
             return
         await self._run("stop", name, timeout=15)
         await self._run("rm", "-f", name, timeout=15)
+        ipc_host = os.path.join(self.settings.ipc_base_dir, name)
+        shutil.rmtree(ipc_host, ignore_errors=True)
         log.info("Destroyed container %s for chat %s", name, chat_id)
         self.save_state()
 
