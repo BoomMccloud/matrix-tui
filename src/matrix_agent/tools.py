@@ -211,30 +211,38 @@ async def execute_tool(
 
 
 async def _self_update() -> str:
-    """Run deploy.sh on the host (git pull + rebuild sandbox image + restart service)."""
-    script = "/home/matrix-tui/scripts/deploy.sh"
-    log.info("self_update: running %s", script)
+    """Run git pull + image rebuild, then restart the service."""
+    repo = "/home/matrix-tui"
 
-    proc = await asyncio.create_subprocess_exec(
-        script,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.STDOUT,
-        cwd="/home/matrix-tui",
-    )
+    async def run(cmd: list[str]) -> tuple[int, str]:
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+            cwd=repo,
+        )
+        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=300)
+        return proc.returncode or 0, stdout.decode().strip()
 
-    # Capture output up until the service restart kills us.
-    # We fire the wait in a task so we can return partial output quickly.
-    asyncio.create_task(_wait_deploy(proc))
+    log.info("self_update: git pull")
+    rc, pull_out = await run(["git", "pull"])
+    if rc != 0:
+        return f"git pull failed (exit {rc}):\n{pull_out}"
+
+    log.info("self_update: rebuilding sandbox image")
+    rc, build_out = await run([
+        "podman", "build", "-t", "matrix-agent-sandbox:latest", "-f", "Containerfile", ".",
+    ])
+    if rc != 0:
+        return f"git pull OK, but image build failed (exit {rc}):\n{build_out}"
+
+    # Everything succeeded — restart after a short delay so this result can be sent first
+    log.info("self_update: restarting service")
+    asyncio.create_task(_delayed_restart())
+    return f"git pull:\n{pull_out}\n\nImage build: OK\n\nRestarting service in 2s..."
+
+
+async def _delayed_restart():
     await asyncio.sleep(2)
-
-    # Read whatever output is available so far
-    assert proc.stdout is not None
-    output = await proc.stdout.read(4096)
-    return f"deploy.sh output (may be truncated — service restarting):\n{output.decode().strip()}"
-
-
-async def _wait_deploy(proc):
-    try:
-        await asyncio.wait_for(proc.wait(), timeout=120)
-    except Exception:
-        pass
+    proc = await asyncio.create_subprocess_exec("systemctl", "restart", "matrix-agent")
+    await proc.wait()
