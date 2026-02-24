@@ -1,4 +1,4 @@
-<h1 align="center">Matrix Agent TUI</h1>
+<h1 align="center">Matrix Agent</h1>
 
 <p align="center">
   <em>A self-hosted agentic coding assistant accessible via Matrix chat.</em>
@@ -13,156 +13,201 @@
 
 ---
 
-**Matrix Agent** brings an autonomous coding assistant directly into your Matrix chat rooms. Each room receives an isolated Podman container where the agent can write code, execute commands, and even take browser screenshots. It's like having a dedicated developer sitting in your chat room, ready to build!
+**Matrix Agent** brings an autonomous coding assistant directly into your Matrix chat rooms. Each room receives an isolated Podman container where the agent can write code, execute commands, take browser screenshots, and submit GitHub pull requests.
 
-## ✨ Features
+## Features
 
-- **Isolated Workspaces**: Every Matrix room gets its own dedicated Podman sandbox container.
-- **Full Coding Environment**: Sandboxes come pre-loaded with Python 3, Node.js 20, Git, and Playwright.
-- **Multi-LLM Support**: Powered by LiteLLM — use Claude, Gemini, MiniMax, or any OpenRouter model.
-- **Visual Feedback**: The agent can take screenshots of web apps running in the sandbox and send them to the chat.
-- **Ephemeral & Secure**: Containers are automatically destroyed when all users leave the room.
+- **Isolated workspaces** — every Matrix room gets its own dedicated Podman sandbox container
+- **Full coding environment** — Python 3, Node.js 20, git, gh CLI, and Playwright pre-installed
+- **Gemini CLI inside the sandbox** — delegates heavy coding tasks to Gemini with 1M token context
+- **Multi-LLM orchestration** — powered by LiteLLM; use Claude, Gemini, or any OpenRouter model
+- **Streaming output** — Gemini's progress streams into the chat as it works
+- **GitHub integration** — agent can clone repos, push branches, and open PRs
+- **Self-updating** — agent can redeploy itself via the `self_update` tool
+- **Unencrypted rooms only** — E2EE is not supported
 
-## 🏗️ Architecture
+## Architecture
 
-```mermaid
-graph TD
-    Client[Element / Matrix Client] <-->|Chat| Homeserver[Matrix Homeserver]
-    Homeserver <-->|matrix-nio| Bot[Matrix Bot]
-    Bot <-->|LLM Tool Loop| Agent[Coding Agent]
-    Agent <-->|Executes Tools| Sandbox[Podman Container]
-    Sandbox -->|Web rendering| Playwright[Playwright]
+```
+Matrix Client (Element)
+       |
+Matrix Homeserver (self-hosted Synapse)
+       |
+Matrix Bot (python-nio + LiteLLM)
+       |
+  Sonnet (orchestrator) ──> Tools: run_command, write_file, read_file,
+       |                           take_screenshot, code, self_update
+       |
+  Gemini CLI (coding agent, runs inside sandbox container)
+       |
+  Podman sandbox container (one per room)
+       |
+  GitHub (gh CLI for PRs)
 ```
 
-## 🚀 Quick Start
+## Deployment
 
 ### Prerequisites
 
-- **Python 3.12+**
-- **[uv](https://github.com/astral-sh/uv)** package manager
-- **Podman** installed and running
-- A **Matrix account** for the bot (e.g., register at [Element](https://app.element.io/))
-- An **LLM API key** (OpenRouter, Gemini, MiniMax, etc.)
+- VPS with **4 vCPU / 8 GB RAM** recommended (2-3 concurrent rooms)
+- Ubuntu/Debian with root access
+- Podman installed
+- [uv](https://github.com/astral-sh/uv) installed
+- LLM API key (OpenRouter, Gemini, etc.)
+- Gemini API key (for the in-sandbox coding agent)
+- GitHub fine-grained PAT with `contents: write` + `pull-requests: write` (optional)
 
-### Setup
-
-1. **Clone the repository:**
-   ```bash
-   git clone https://github.com/BoomMccloud/matrix-tui.git
-   cd matrix-tui
-   ```
-
-2. **Build the sandbox container image:**
-   ```bash
-   podman build -t matrix-agent-sandbox -f Containerfile .
-   ```
-
-3. **Configure the environment:**
-   ```bash
-   cp .env.example .env
-   # Edit .env with your credentials (see Configuration below)
-   ```
-
-4. **Run the bot:**
-   ```bash
-   uv run python -m matrix_agent
-   ```
-
-## ⚙️ Configuration
-
-All configuration is managed via environment variables or the `.env` file.
-
-| Variable | Required | Default | Description |
-|----------|----------|---------|-------------|
-| `MATRIX_HOMESERVER` | No | `https://matrix.org` | Matrix homeserver URL |
-| `MATRIX_USER` | Yes | | Bot's Matrix user ID (e.g., `@mybot:matrix.org`) |
-| `MATRIX_PASSWORD` | Yes | | Bot's Matrix password |
-| `LLM_API_KEY` | Yes | | API key for your LLM provider |
-| `LLM_MODEL` | No | `openrouter/anthropic/claude-sonnet-4` | LiteLLM model string |
-| `PODMAN_PATH` | No | `podman` | Path to the podman binary |
-| `SANDBOX_IMAGE` | No | `matrix-agent-sandbox:latest` | Sandbox container image name |
-| `COMMAND_TIMEOUT_SECONDS` | No | `120` | Max execution time per command |
-| `MAX_AGENT_TURNS` | No | `25` | Max LLM tool-call rounds per message |
-
-### LLM Provider Examples
-
-Any provider supported by [LiteLLM](https://docs.litellm.ai/docs/providers) works seamlessly:
-
-**OpenRouter**
-```bash
-LLM_MODEL=openrouter/anthropic/claude-3.5-sonnet
-LLM_API_KEY=sk-or-...
-```
-
-**Gemini**
-```bash
-LLM_MODEL=gemini/gemini-2.5-pro
-LLM_API_KEY=AI...
-```
-
-**MiniMax**
-```bash
-LLM_MODEL=minimax/MiniMax-M2.5
-LLM_API_KEY=...
-```
-
-## 🛠️ How It Works (Room Lifecycle)
-
-1. **Invite the Bot**: Invite the bot to an unencrypted Matrix room. The bot joins and sends a greeting.
-2. **First Message**: The bot creates an isolated `sandbox-<slug>` container exclusively for that room.
-3. **Collaboration**: Send tasks in the chat. The agent routes them to the tool loop, executes commands in the sandbox, and streams replies back to the room.
-4. **Cleanup**: When all users leave the room, or if the bot is kicked, the container is completely destroyed.
-
-## 🧰 Agent Tools
-
-The agent is equipped with four core capabilities within its sandbox:
-
-| Tool | Description |
-|------|-------------|
-| `run_command` | Execute shell commands (e.g., `npm install`, `python script.py`) |
-| `write_file` | Create or modify files within the container |
-| `read_file` | Read the contents of files from the container |
-| `take_screenshot` | Launch a headless browser via Playwright to screenshot a URL |
-
-## 🌍 VPS Deployment
-
-For a self-hosted environment, a VPS with **4 vCPU / 8GB RAM** is recommended to support 2-3 concurrent rooms.
+### Step 1 — Clone and configure
 
 ```bash
-# On a VPS (Ubuntu/Debian)
-sudo apt update && sudo apt install -y podman
-curl -LsSf https://astral.sh/uv/install.sh | sh
-source ~/.bashrc
-
 git clone https://github.com/BoomMccloud/matrix-tui.git
 cd matrix-tui
-podman build -t matrix-agent-sandbox -f Containerfile .
 cp .env.example .env
-nano .env  # Add your credentials
-uv run python -m matrix_agent
+nano .env
 ```
 
-## ⚠️ Important Notes
+Fill in `.env` — at minimum:
 
-- **Unencrypted Rooms Only**: The bot currently does not support End-to-End Encryption (E2EE). Please create unencrypted rooms.
-- **Ephemeral Context**: While the container state persists across restarts (via `state.json`), heavy conversational context may be lost if not managed properly.
-- **Isolation**: Each room gets exactly one container. They are fully isolated from one another.
+| Variable | Description |
+|----------|-------------|
+| `VPS_IP` | Your VPS public IP — homeserver URL, bot user, and admin user are all derived from this |
+| `MATRIX_PASSWORD` | Bot account password (you choose) |
+| `MATRIX_ADMIN_PASSWORD` | Your human account password (you choose) |
+| `LLM_API_KEY` | API key for the orchestrator LLM |
+| `LLM_MODEL` | e.g. `openrouter/anthropic/claude-sonnet-4` |
+| `GEMINI_API_KEY` | API key for the in-sandbox Gemini coding agent |
 
-## 🆘 Troubleshooting
+If not self-hosting, override the derived values explicitly:
+```env
+MATRIX_HOMESERVER = https://matrix.org
+MATRIX_USER = @mybot:matrix.org
+MATRIX_ADMIN_USER = @me:matrix.org
+```
 
-- **Bot not responding to messages?**
-  Ensure the room is *unencrypted*. E2EE blocks the bot from reading messages.
-- **Container creation fails?**
-  Check that the Podman socket is accessible and the `matrix-agent-sandbox` image was built successfully.
-- **"Command timeout" errors?**
-  Some installations (like `npm install`) might take longer than the default 120 seconds. Increase `COMMAND_TIMEOUT_SECONDS` in your `.env`.
-- **macOS Podman issues?**
-  Remember that `/tmp` on macOS is a symlink to `/private/tmp`.
+### Step 2 — Set up the local Matrix homeserver (Synapse)
 
-## 📚 Documentation
+This runs a local Synapse instance in a Podman container, creates both accounts, and configures systemd:
 
-- [MVP Spec](docs/mvp_spec.md) — Architecture and design decisions
-- [Programming Loop Spec](docs/programming-loop-spec.md) — Planned autonomous coding workflow
+```bash
+bash scripts/setup-synapse.sh
+```
 
----
-*Built with ❤️ for AI-assisted development in the chat.*
+This script:
+1. Creates `/opt/synapse/data` and generates `homeserver.yaml`
+2. Patches the config for plain HTTP on port 8008, no federation
+3. Installs and starts a `synapse` systemd service
+4. Registers the bot account and your admin account
+5. Adds a `Requires=synapse.service` dependency to `matrix-agent.service`
+
+### Step 3 — Build the sandbox image and install the bot service
+
+```bash
+podman build -t matrix-agent-sandbox:latest -f Containerfile .
+```
+
+Install the bot as a systemd service (create `/etc/systemd/system/matrix-agent.service`):
+
+```ini
+[Unit]
+Description=Matrix Agent Bot
+After=network.target synapse.service
+Requires=synapse.service
+
+[Service]
+Type=simple
+Restart=on-failure
+RestartSec=5s
+WorkingDirectory=/home/matrix-tui
+ExecStart=/root/.local/bin/uv run python -m matrix_agent
+
+[Install]
+WantedBy=multi-user.target
+```
+
+```bash
+systemctl daemon-reload
+systemctl enable --now matrix-agent
+journalctl -u matrix-agent -f
+```
+
+### Step 4 — Connect a Matrix client
+
+1. Open [Element](https://app.element.io/) (or any Matrix client)
+2. Choose **Sign in** and set the homeserver to `http://<VPS_IP>:8008`
+3. Log in as your admin account (`@yourname:<VPS_IP>`)
+4. Create a room (unencrypted), invite `@matrixbot:<VPS_IP>`
+5. The bot joins and replies — send it a task
+
+### Redeploying
+
+To update bot code and rebuild the sandbox image:
+
+```bash
+# Manually on the VPS
+bash scripts/deploy.sh
+
+# Or ask the bot in chat
+"redeploy yourself"
+```
+
+The bot will run `git pull`, rebuild the sandbox image, send you the result, then restart itself.
+
+## Configuration reference
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `VPS_IP` | | VPS public IP, used by setup-synapse.sh |
+| `MATRIX_HOMESERVER` | `https://matrix.org` | Matrix homeserver URL |
+| `MATRIX_USER` | | Bot Matrix user ID |
+| `MATRIX_PASSWORD` | | Bot password |
+| `MATRIX_ADMIN_USER` | | Human admin Matrix user ID |
+| `MATRIX_ADMIN_PASSWORD` | | Human admin password |
+| `LLM_API_KEY` | | Orchestrator LLM API key |
+| `LLM_MODEL` | `openrouter/anthropic/claude-sonnet-4` | LiteLLM model string |
+| `GEMINI_API_KEY` | | Gemini API key for in-sandbox coding agent |
+| `GITHUB_TOKEN` | | Fine-grained PAT for GitHub PR submissions |
+| `PODMAN_PATH` | `podman` | Path to podman binary |
+| `SANDBOX_IMAGE` | `matrix-agent-sandbox:latest` | Sandbox image name |
+| `COMMAND_TIMEOUT_SECONDS` | `120` | Max time per shell command |
+| `CODING_TIMEOUT_SECONDS` | `1800` | Max time per Gemini CLI invocation |
+| `MAX_AGENT_TURNS` | `25` | Max LLM tool-call rounds per message |
+| `IPC_BASE_DIR` | `/tmp/sandbox-ipc` | Host directory for sandbox IPC files |
+
+## Agent tools
+
+| Tool | Runs on | Description |
+|------|---------|-------------|
+| `run_command` | Sandbox | Execute shell commands |
+| `write_file` | Sandbox | Write files into the container |
+| `read_file` | Sandbox | Read files from the container |
+| `code` | Sandbox | Delegate to Gemini CLI (streams output to chat) |
+| `run_tests` | Sandbox | Run ruff lint + pytest |
+| `take_screenshot` | Sandbox | Screenshot a URL via Playwright |
+| `self_update` | VPS host | git pull + rebuild image + restart service |
+
+## Room lifecycle
+
+1. **Invite** — bot joins, sends greeting
+2. **First message** — sandbox container created for the room
+3. **Tasks** — agent runs tool loop, streams Gemini output to chat
+4. **Cleanup** — container destroyed when all users leave or bot is kicked
+
+## Troubleshooting
+
+**Bot not responding after restart**
+The invite may have fired before the bot was ready. Leave and re-invite, or send a new message to an existing room.
+
+**Sync timeouts with matrix.org**
+matrix.org blocks long-poll connections from some VPS IPs. Use the local Synapse setup instead (`setup-synapse.sh`).
+
+**Container creation fails**
+Check that the sandbox image was built: `podman images | grep matrix-agent-sandbox`
+
+**Command timeout errors**
+Increase `COMMAND_TIMEOUT_SECONDS` in `.env` for slow operations like `npm install`.
+
+## Documentation
+
+- [MVP Spec](docs/mvp_spec.md)
+- [Programming Loop Spec](docs/programming-loop-spec.md)
+- [Memory Spec](docs/memory-spec.md)

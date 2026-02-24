@@ -1,3 +1,4 @@
+from pydantic import model_validator
 from pydantic_settings import BaseSettings
 
 
@@ -5,11 +6,24 @@ class Settings(BaseSettings):
     model_config = {"env_prefix": "", "env_file": ".env"}
 
     vps_ip: str = ""
-    matrix_homeserver: str = "https://matrix.org"
-    matrix_user: str
+    matrix_homeserver: str = ""
+    matrix_user: str = ""
     matrix_password: str
     matrix_admin_user: str = ""
     matrix_admin_password: str = ""
+
+    @model_validator(mode="after")
+    def derive_from_vps_ip(self) -> "Settings":
+        if self.vps_ip:
+            if not self.matrix_homeserver:
+                self.matrix_homeserver = f"http://{self.vps_ip}:8008"
+            if not self.matrix_user:
+                self.matrix_user = f"@matrixbot:{self.vps_ip}"
+            if not self.matrix_admin_user:
+                self.matrix_admin_user = f"@admin:{self.vps_ip}"
+        elif not self.matrix_homeserver:
+            self.matrix_homeserver = "https://matrix.org"
+        return self
     llm_api_key: str
     llm_model: str = "openrouter/anthropic/claude-haiku-4-5"
     podman_path: str = "podman"
