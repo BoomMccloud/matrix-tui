@@ -122,16 +122,6 @@ class Bot:
             },
         )
 
-    async def _reconnect_containers(self):
-        """Reconnect to existing sandbox containers from a previous run."""
-        rc, out, err = await self.sandbox._run("ps", "--format", "{{.Names}}", "--filter", "ancestor=" + self.settings.sandbox_image)
-        if rc != 0 or not out.strip():
-            return
-        for name in out.strip().splitlines():
-            # We don't have room_id -> container name mapping yet,
-            # so just log what's running. Future: use named containers.
-            log.info("Found existing container: %s", name)
-
     async def run(self):
         await self._login()
 
@@ -146,7 +136,9 @@ class Bot:
             log.info("catch-up join (no greeting) for %s", room_id)
             await self.client.join(room_id)
 
-        await self._reconnect_containers()
+        histories = await self.sandbox.load_state()
+        self.agent.load_histories(histories)
+        log.info("Loaded state: %d rooms", len(histories))
 
         self._synced = True
         log.info("Initial sync complete, now listening")

@@ -23,6 +23,10 @@ Work in /workspace. When you start a web server, use take_screenshot to show the
 Use the `code` tool for any non-trivial coding task — writing features, fixing bugs, refactoring,
 reviewing code, or explaining a codebase. Gemini has 1M token context and can read entire repos.
 Use run_command for simple shell operations. Use code for anything requiring code intelligence.
+After Gemini writes or modifies code, always call run_tests to verify lint and tests pass before reporting success.
+
+After cloning a repo, always run: code(task="run /init to generate GEMINI.md for this repo", ...)
+This lets Gemini analyze the codebase and write its own project context file.
 
 IMPORTANT — two distinct environments:
 - sandbox container (/workspace): run_command, read_file, write_file, code, take_screenshot all operate HERE
@@ -37,8 +41,13 @@ class Agent:
         self.settings = settings
         self.sandbox = sandbox
         self.max_turns = settings.max_agent_turns
-        # Per-chat message history (in-memory, lost on restart)
         self._histories: dict[str, list[dict]] = {}
+        # Give sandbox a reference so it can persist histories with state
+        self.sandbox._histories = self._histories
+
+    def load_histories(self, histories: dict[str, list[dict]]) -> None:
+        """Populate in-memory histories from persisted state."""
+        self._histories.update(histories)
 
     def _get_history(self, chat_id: str) -> list[dict]:
         if chat_id not in self._histories:
@@ -65,6 +74,7 @@ class Agent:
             # If no tool calls, we have a final text response
             if not msg.tool_calls:
                 if msg.content:
+                    self.sandbox.save_state()
                     yield msg.content, None
                 return
 
@@ -82,4 +92,5 @@ class Agent:
                 if image:
                     yield None, image
 
+        self.sandbox.save_state()
         yield "Reached maximum turns. Here's where I got to — let me know if you'd like me to continue.", None

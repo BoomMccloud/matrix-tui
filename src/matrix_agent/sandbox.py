@@ -1,13 +1,23 @@
 """Podman sandbox manager — one container per chat."""
 
 import asyncio
+import json
 import logging
 import os
+import re
 import tempfile
 
 from .config import Settings
 
 log = logging.getLogger(__name__)
+
+STATE_PATH = "/home/matrix-tui/state.json"
+
+
+def _container_name(chat_id: str) -> str:
+    """Stable container name derived from room ID — safe for podman --name."""
+    slug = re.sub(r"[^a-zA-Z0-9_.-]", "-", chat_id).strip("-")
+    return f"sandbox-{slug}"
 
 
 class SandboxManager:
@@ -16,7 +26,9 @@ class SandboxManager:
         self.podman = settings.podman_path
         self.image = settings.sandbox_image
         self.timeout = settings.command_timeout_seconds
-        self._containers: dict[str, str] = {}  # chat_id -> container_id
+        self._containers: dict[str, str] = {}  # chat_id -> container_name
+        # Reference to agent histories — set by Agent after construction
+        self._histories: dict[str, list[dict]] | None = None
 
     async def _run(
         self, *args: str, timeout: int | None = None, stdin_data: bytes | None = None,
@@ -38,9 +50,65 @@ class SandboxManager:
             return 1, "", f"Command timed out after {timeout}s"
         return proc.returncode or 0, stdout.decode(), stderr.decode()
 
+    # ------------------------------------------------------------------ #
+    # State persistence
+    # ------------------------------------------------------------------ #
+
+    def save_state(self) -> None:
+        """Atomically write containers + histories to state.json."""
+        state = {
+            "containers": self._containers,
+            "history": self._histories or {},
+        }
+        tmp = STATE_PATH + ".tmp"
+        try:
+            with open(tmp, "w") as f:
+                json.dump(state, f, indent=2)
+            os.replace(tmp, STATE_PATH)
+            log.debug("State saved (%d rooms)", len(self._containers))
+        except Exception:
+            log.exception("Failed to save state")
+
+    async def load_state(self) -> dict[str, list[dict]]:
+        """Load state.json. Returns histories dict (containers loaded into self._containers).
+        Verifies each container is still running; removes stale entries."""
+        if not os.path.exists(STATE_PATH):
+            log.info("No state.json found — starting fresh")
+            return {}
+
+        try:
+            with open(STATE_PATH) as f:
+                state = json.load(f)
+        except Exception:
+            log.exception("Failed to read state.json — starting fresh")
+            return {}
+
+        containers: dict[str, str] = state.get("containers", {})
+        histories: dict[str, list[dict]] = state.get("history", {})
+
+        # Verify each container is still alive
+        live: dict[str, str] = {}
+        for chat_id, name in containers.items():
+            rc, out, _ = await self._run("inspect", "--format", "{{.State.Status}}", name)
+            if rc == 0 and out.strip() == "running":
+                live[chat_id] = name
+                log.info("Reconnected container %s for %s", name, chat_id)
+            else:
+                log.info("Stale container %s for %s — will recreate on next message", name, chat_id)
+                histories.pop(chat_id, None)
+
+        self._containers = live
+        return histories
+
+    # ------------------------------------------------------------------ #
+    # Container lifecycle
+    # ------------------------------------------------------------------ #
+
     async def create(self, chat_id: str) -> str:
         if chat_id in self._containers:
             return self._containers[chat_id]
+
+        name = _container_name(chat_id)
 
         env_flags: list[str] = []
         if self.settings.gemini_api_key:
@@ -48,6 +116,7 @@ class SandboxManager:
 
         rc, out, err = await self._run(
             "run", "-d",
+            "--name", name,
             "--shm-size=256m",
             *env_flags,
             self.image,
@@ -55,27 +124,115 @@ class SandboxManager:
         )
         if rc != 0:
             raise RuntimeError(f"Failed to create container: {err}")
-        cid = out.strip()
-        self._containers[chat_id] = cid
-        log.info("Created container %s for chat %s", cid[:12], chat_id)
-        return cid
+
+        self._containers[chat_id] = name
+        log.info("Created container %s for chat %s", name, chat_id)
+        await self._init_workspace(name)
+        self.save_state()
+        return name
+
+    async def _init_workspace(self, container_name: str) -> None:
+        """Initialize workspace coordination files on container creation."""
+        async def write(path: str, content: str) -> None:
+            await self._run(
+                "exec", "-i", container_name, "sh", "-c", f"mkdir -p $(dirname {path}) && cat > {path}",
+                stdin_data=content.encode(),
+            )
+
+        # status.md — append-only worklog, shared by all agents, not in git
+        await write("/workspace/status.md", """\
+# Status Log
+
+Append one line per task in this format:
+[YYYY-MM-DD HH:MM] <what was done>
+
+Example:
+[2026-02-24 10:12] Cloned matrix-tui repo, ran /init to generate GEMINI.md
+[2026-02-24 10:31] Added error handling to sandbox.py create() method
+[2026-02-24 11:05] Fixed off-by-one in container name slug — replaced spaces with dashes
+
+""")
+
+        # GEMINI.md — auto-loaded by Gemini CLI from cwd (/workspace), not in git
+        # Imports status.md for session history. Repo GEMINI.md (generated by /init)
+        # is loaded automatically when Gemini runs inside the repo directory.
+        await write("/workspace/GEMINI.md", """\
+# Workspace Context
+
+This file is your instruction set. It is loaded automatically on every invocation.
+
+## Prior work (auto-imported)
+
+@status.md
+
+## Rules
+
+1. Before starting any task, read status.md (imported above) to understand what has already been done.
+2. When working inside a cloned repo, read AGENTS.md in the repo root for conventions and architecture.
+3. After completing each task, append one line to /workspace/status.md:
+   [YYYY-MM-DD HH:MM] <what was done>
+4. When you discover a convention, gotcha, or architectural decision worth remembering,
+   append it to AGENTS.md in the repo root. Use the format shown in that file.
+5. After cloning a new repo, run `/init` inside the repo directory to generate
+   a project-specific GEMINI.md with codebase context.
+
+## What NOT to put in status.md
+- Do not put decisions or conventions here — those go in AGENTS.md
+- Do not edit old entries — append only
+- One line per task, no multi-line entries
+""")
+
+        # AfterAgent hook — appends to status.md unconditionally after every Gemini session
+        await write("/workspace/.gemini/settings.json", """\
+{
+  "hooks": {
+    "AfterAgent": [
+      {
+        "hooks": [
+          {
+            "name": "append-status",
+            "type": "command",
+            "command": "/workspace/.gemini/hooks/after-agent.sh",
+            "timeout": 5000
+          }
+        ]
+      }
+    ]
+  }
+}
+""")
+
+        await write("/workspace/.gemini/hooks/after-agent.sh", """\
+#!/bin/sh
+# AfterAgent hook — appends timestamp to status.md and exits cleanly.
+# Reads JSON from stdin (Gemini hook protocol), writes JSON to stdout.
+input=$(cat)
+timestamp=$(date '+%Y-%m-%d %H:%M')
+echo "[$timestamp] Gemini session completed" >> /workspace/status.md
+echo '{"continue": true}'
+""")
+
+        # Make hook executable
+        await self._run(
+            "exec", container_name,
+            "chmod", "+x", "/workspace/.gemini/hooks/after-agent.sh",
+        )
 
     async def exec(self, chat_id: str, command: str) -> tuple[int, str, str]:
-        cid = self._containers.get(chat_id)
-        if not cid:
+        name = self._containers.get(chat_id)
+        if not name:
             raise RuntimeError(f"No container for chat {chat_id}")
-        return await self._run("exec", cid, "sh", "-c", command)
+        return await self._run("exec", name, "sh", "-c", command)
 
     async def write_file(self, chat_id: str, path: str, content: str) -> str:
-        cid = self._containers.get(chat_id)
-        if not cid:
+        name = self._containers.get(chat_id)
+        if not name:
             raise RuntimeError(f"No container for chat {chat_id}")
 
-        # Ensure parent directory exists
-        await self._run("exec", cid, "mkdir", "-p", os.path.dirname(path))
+        await self._run("exec", name, "mkdir", "-p", os.path.dirname(path))
 
         rc, out, err = await self._run(
-            "exec", "-i", cid, "sh", "-c", f"cat > {path}",
+            "exec", "-i", name, "sh", "-c", f"cat > {path}",
             stdin_data=content.encode(),
         )
         if rc != 0:
@@ -89,25 +246,24 @@ class SandboxManager:
         return out
 
     async def screenshot(self, chat_id: str, url: str) -> bytes | None:
-        cid = self._containers.get(chat_id)
-        if not cid:
+        name = self._containers.get(chat_id)
+        if not name:
             raise RuntimeError(f"No container for chat {chat_id}")
 
         container_path = "/tmp/screenshot.png"
         script = self.settings.screenshot_script
         rc, out, err = await self._run(
-            "exec", cid, "node", script, url, container_path,
+            "exec", name, "node", script, url, container_path,
             timeout=30,
         )
         if rc != 0:
             log.error("Screenshot failed: %s", err)
             return None
 
-        # Copy out via podman cp to a temp file
-        with tempfile.NamedTemporaryFile(suffix=".png", delete=False, dir="/private/tmp") as f:
+        with tempfile.NamedTemporaryFile(suffix=".png", delete=False, dir="/tmp") as f:
             host_path = f.name
 
-        rc, out, err = await self._run("cp", f"{cid}:{container_path}", host_path)
+        rc, out, err = await self._run("cp", f"{name}:{container_path}", host_path)
         if rc != 0:
             log.error("Screenshot cp failed: %s", err)
             return None
@@ -119,33 +275,34 @@ class SandboxManager:
             os.unlink(host_path)
 
     async def get_host_port(self, chat_id: str, container_port: int) -> int | None:
-        cid = self._containers.get(chat_id)
-        if not cid:
+        name = self._containers.get(chat_id)
+        if not name:
             return None
-        rc, out, err = await self._run("port", cid, str(container_port))
+        rc, out, err = await self._run("port", name, str(container_port))
         if rc != 0:
             return None
-        # Output like "0.0.0.0:12345"
         try:
             return int(out.strip().split(":")[-1])
         except (ValueError, IndexError):
             return None
 
     async def destroy(self, chat_id: str) -> None:
-        cid = self._containers.pop(chat_id, None)
-        if not cid:
+        name = self._containers.pop(chat_id, None)
+        if not name:
             return
-        await self._run("stop", cid, timeout=15)
-        await self._run("rm", "-f", cid, timeout=15)
-        log.info("Destroyed container %s for chat %s", cid[:12], chat_id)
+        await self._run("stop", name, timeout=15)
+        await self._run("rm", "-f", name, timeout=15)
+        log.info("Destroyed container %s for chat %s", name, chat_id)
+        self.save_state()
 
     async def code(self, chat_id: str, task: str) -> tuple[int, str, str]:
-        """Run Gemini CLI on a task. Task is passed as a direct argv argument (no shell escaping needed)."""
-        cid = self._containers.get(chat_id)
-        if not cid:
+        """Run Gemini CLI on a task. Task passed as direct argv — no shell escaping needed.
+        Runs from /workspace so GEMINI.md is auto-loaded by Gemini CLI."""
+        name = self._containers.get(chat_id)
+        if not name:
             raise RuntimeError(f"No container for chat {chat_id}")
         return await self._run(
-            "exec", cid,
+            "exec", "--workdir", "/workspace", name,
             "gemini", "-p", task,
             timeout=self.settings.coding_timeout_seconds,
         )

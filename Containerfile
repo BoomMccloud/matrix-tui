@@ -11,6 +11,11 @@ RUN mkdir -p /opt/playwright && cd /opt/playwright && npm init -y && npm install
 # Screenshot helper
 COPY screenshot.js /opt/playwright/screenshot.js
 
+# uv + ruff + pytest for Python project testing
+RUN curl -LsSf https://astral.sh/uv/install.sh | sh
+ENV PATH="/root/.local/bin:$PATH"
+RUN uv tool install ruff && uv tool install pytest
+
 # Gemini CLI coding agent
 RUN npm install -g @google/gemini-cli
 

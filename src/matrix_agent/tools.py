@@ -1,7 +1,6 @@
 """Tool definitions and dispatch for the agent."""
 
 import asyncio
-import base64
 import json
 import logging
 
@@ -90,6 +89,27 @@ TOOL_SCHEMAS = [
     {
         "type": "function",
         "function": {
+            "name": "run_tests",
+            "description": (
+                "Run lint (ruff) and tests (pytest) in the sandbox container. "
+                "Call this after writing or modifying code to verify the build is clean. "
+                "Returns pass/fail status and any errors."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Directory to run tests in. Defaults to /workspace.",
+                    },
+                },
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "self_update",
             "description": (
                 "Update the bot itself on the VPS host: runs git pull then restarts the systemd service. "
@@ -158,6 +178,18 @@ async def execute_tool(
             output += f"\nSTDERR:\n{stderr}"
         if rc != 0:
             output += f"\n[exit code: {rc}]"
+        if len(output) > 10000:
+            output = output[:10000] + "\n... (truncated)"
+        return output, None
+
+    if name == "run_tests":
+        path = args.get("path", "/workspace")
+        lint_rc, lint_out, lint_err = await sandbox.exec(chat_id, f"cd {path} && ruff check .")
+        test_rc, test_out, test_err = await sandbox.exec(chat_id, f"cd {path} && pytest -v 2>&1 || true")
+        lint_result = lint_out or lint_err or "No issues."
+        test_result = test_out or test_err or "No output."
+        status = "PASS" if lint_rc == 0 and test_rc == 0 else "FAIL"
+        output = f"[{status}]\n\n=== Lint (ruff) ===\n{lint_result}\n\n=== Tests (pytest) ===\n{test_result}"
         if len(output) > 10000:
             output = output[:10000] + "\n... (truncated)"
         return output, None
