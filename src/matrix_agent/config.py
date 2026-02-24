@@ -8,7 +8,7 @@ class Settings(BaseSettings):
     matrix_user: str
     matrix_password: str
     llm_api_key: str
-    llm_model: str = "openrouter/anthropic/claude-sonnet-4"
+    llm_model: str = "openrouter/anthropic/claude-haiku-4-5"
     podman_path: str = "podman"
     sandbox_image: str = "matrix-agent-sandbox:latest"
     command_timeout_seconds: int = 120

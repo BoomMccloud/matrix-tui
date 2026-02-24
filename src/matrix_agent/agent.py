@@ -23,6 +23,11 @@ Work in /workspace. When you start a web server, use take_screenshot to show the
 Use the `code` tool for any non-trivial coding task — writing features, fixing bugs, refactoring,
 reviewing code, or explaining a codebase. Gemini has 1M token context and can read entire repos.
 Use run_command for simple shell operations. Use code for anything requiring code intelligence.
+
+IMPORTANT — two distinct environments:
+- sandbox container (/workspace): run_command, read_file, write_file, code, take_screenshot all operate HERE
+- VPS host: use self_update ONLY for updating the bot itself (git pull + service restart)
+Never use run_command to try to update the bot or restart the service — that runs inside the container, not the host.
 Explain what you're doing as you work.\
 """
 

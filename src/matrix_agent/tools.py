@@ -1,9 +1,13 @@
 """Tool definitions and dispatch for the agent."""
 
+import asyncio
 import base64
 import json
+import logging
 
 from .sandbox import SandboxManager
+
+log = logging.getLogger(__name__)
 
 TOOL_SCHEMAS = [
     {
@@ -86,6 +90,22 @@ TOOL_SCHEMAS = [
     {
         "type": "function",
         "function": {
+            "name": "self_update",
+            "description": (
+                "Update the bot itself on the VPS host: runs git pull then restarts the systemd service. "
+                "Use this when the user asks to update the bot, pull latest changes, or restart the service. "
+                "This operates on the HOST, not inside the sandbox container."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "take_screenshot",
             "description": "Take a browser screenshot of a URL accessible from inside the container. Use this after starting a web server to see the result.",
             "parameters": {
@@ -142,6 +162,9 @@ async def execute_tool(
             output = output[:10000] + "\n... (truncated)"
         return output, None
 
+    if name == "self_update":
+        return await _self_update(), None
+
     if name == "take_screenshot":
         img = await sandbox.screenshot(chat_id, args["url"])
         if img:
@@ -149,3 +172,38 @@ async def execute_tool(
         return "Screenshot failed.", None
 
     return f"Unknown tool: {name}", None
+
+
+async def _self_update() -> str:
+    """Run git pull then restart the systemd service on the host."""
+    async def run(cmd: list[str]) -> tuple[int, str]:
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+            cwd="/home/matrix-tui",
+        )
+        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=60)
+        return proc.returncode or 0, stdout.decode().strip()
+
+    log.info("self_update: running git pull")
+    rc, out = await run(["git", "pull"])
+    if rc != 0:
+        return f"git pull failed (exit {rc}):\n{out}"
+
+    pull_output = out
+    log.info("self_update: restarting matrix-agent service")
+
+    # Restart is fire-and-forget — the process will be killed mid-response,
+    # so we send the pull result before the restart takes effect.
+    asyncio.create_task(_delayed_restart())
+
+    return f"git pull:\n{pull_output}\n\nRestarting service in 2s..."
+
+
+async def _delayed_restart():
+    await asyncio.sleep(2)
+    proc = await asyncio.create_subprocess_exec(
+        "systemctl", "restart", "matrix-agent",
+    )
+    await proc.wait()
