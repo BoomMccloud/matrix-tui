@@ -1,5 +1,6 @@
 """Matrix bot — bridges room messages to the agent, manages room/container lifecycle."""
 
+import asyncio
 import io
 import logging
 
@@ -26,6 +27,8 @@ class Bot:
         self.agent = agent
         self.client = AsyncClient(settings.matrix_homeserver, settings.matrix_user)
         self._synced = False
+        self._queues: dict[str, asyncio.Queue] = {}
+        self._workers: dict[str, asyncio.Task] = {}
 
     async def _login(self):
         resp = await self.client.login(self.settings.matrix_password)
@@ -46,7 +49,7 @@ class Bot:
         )
 
     async def _on_message(self, room, event):
-        """Handle text messages. Creates sandbox on first message if needed."""
+        """Enqueue incoming messages for per-room processing."""
         if event.sender == self.client.user_id:
             return
         if not self._synced:
@@ -55,7 +58,36 @@ class Bot:
         room_id = room.room_id
         text = event.body
 
-        # Create sandbox on first message
+        if room_id not in self._queues:
+            self._queues[room_id] = asyncio.Queue()
+            self._workers[room_id] = asyncio.create_task(
+                self._room_worker(room_id), name=f"worker-{room_id}"
+            )
+
+        queue = self._queues[room_id]
+        position = queue.qsize()
+        await queue.put(text)
+
+        if position > 0:
+            await self.client.room_send(
+                room_id, "m.room.message",
+                {"msgtype": "m.text", "body": f"⏳ Queued (position {position + 1}) — I'll get to this after the current task."},
+            )
+
+    async def _room_worker(self, room_id: str) -> None:
+        """Process messages for a single room, one at a time."""
+        queue = self._queues[room_id]
+        while True:
+            text = await queue.get()
+            try:
+                await self._process_message(room_id, text)
+            except Exception:
+                log.exception("Unhandled error in room worker %s", room_id)
+            finally:
+                queue.task_done()
+
+    async def _process_message(self, room_id: str, text: str) -> None:
+        """Create sandbox if needed, send ack, run agent, stream replies."""
         if room_id not in self.sandbox._containers:
             log.info("First message in %s — creating sandbox", room_id)
             try:
@@ -68,6 +100,12 @@ class Bot:
                 )
                 return
 
+        await self.client.room_send(
+            room_id, "m.room.message",
+            {"msgtype": "m.text", "body": "⏳ Working on it..."},
+        )
+
+        typing_task = asyncio.create_task(self._keep_typing(room_id))
         try:
             async for reply_text, image in self.agent.handle_message(room_id, text):
                 if image:
@@ -83,6 +121,9 @@ class Bot:
                 room_id, "m.room.message",
                 {"msgtype": "m.text", "body": f"Error: {e}"},
             )
+        finally:
+            typing_task.cancel()
+            await self.client.room_typing(room_id, typing=False)
 
     async def _on_member(self, room, event):
         """Cleanup when bot is kicked or last user leaves."""
@@ -92,6 +133,7 @@ class Bot:
         if event.state_key == self.client.user_id and event.membership in ("leave", "ban"):
             log.info("Bot removed from %s — destroying sandbox", room.room_id)
             await self.sandbox.destroy(room.room_id)
+            self._cancel_worker(room.room_id)
             return
 
         if event.membership in ("leave", "ban") and event.state_key != self.client.user_id:
@@ -99,7 +141,22 @@ class Bot:
             if not non_bot:
                 log.info("All users left %s — destroying sandbox and leaving", room.room_id)
                 await self.sandbox.destroy(room.room_id)
+                self._cancel_worker(room.room_id)
                 await self.client.room_leave(room.room_id)
+
+    def _cancel_worker(self, room_id: str) -> None:
+        if task := self._workers.pop(room_id, None):
+            task.cancel()
+        self._queues.pop(room_id, None)
+
+    async def _keep_typing(self, room_id: str) -> None:
+        """Send typing indicator every 20s until cancelled."""
+        try:
+            while True:
+                await self.client.room_typing(room_id, typing=True, timeout=30000)
+                await asyncio.sleep(20)
+        except asyncio.CancelledError:
+            pass
 
     async def _send_image(self, room_id: str, image_data: bytes):
         """Upload and send an image to a room."""

@@ -69,6 +69,119 @@ One container per room, named `sandbox-<room-slug>`. State persists across resta
 - Bot loses container mapping on restart unless named containers + state.json are in use
 - `_synced` flag must be True before handling any Matrix events — pre-startup events are replayed
 
+## Orchestrator Lifecycle
+
+The orchestrator is the bot process (`uv run python -m matrix_agent`), typically running as a
+systemd service. It owns all per-room state and coordinates between Matrix and sandboxes.
+
+### Startup sequence
+
+```
+1. AsyncClient created (not yet connected)
+2. Login to Matrix homeserver
+3. Register event callbacks (invite, message, member)
+4. Initial sync — replays all missed events since last disconnect
+   └─ _synced = False during this phase; all callbacks return early
+5. Catch-up joins: auto-join any rooms invited to while offline (no greeting sent)
+6. load_state() — reads state.json from disk
+   ├─ For each saved container: podman inspect → verify still running
+   ├─ Live containers → reconnected (mapping restored)
+   └─ Stale containers → dropped (history cleared, recreated on next message)
+7. agent.load_histories() — restores per-room conversation histories into memory
+8. _synced = True — event handling begins
+9. sync_forever() — long-poll loop starts
+```
+
+### Shutdown sequence
+
+```
+1. sync_forever() exits (SIGTERM / SIGINT / unhandled exception)
+2. destroy_all() — stops and removes every sandbox container
+3. client.close() — disconnects from Matrix homeserver
+```
+
+State is **not** written on shutdown — it is written incrementally after every agent reply
+and after every sandbox create/destroy. Shutdown is therefore safe to SIGKILL.
+
+### Restart behaviour
+
+- Containers survive a bot restart (they keep running in Podman)
+- On next startup, load_state() reconnects live containers; stale ones are recreated on demand
+- Conversation histories are restored from state.json — the orchestrator remembers prior turns
+- Per-room worker tasks and queues are recreated fresh on the next incoming message
+
+---
+
+## Room & Container Lifecycle
+
+Each Matrix room maps 1-to-1 with a Podman container. The container is created lazily on the
+first message, not on invite.
+
+### Room open (first message)
+
+```
+Matrix invite received
+  └─ Bot joins room, sends greeting — no container yet
+
+First user message arrives
+  └─ _on_message enqueues text → _room_worker starts (asyncio.Task per room)
+       └─ _process_message:
+            ├─ sandbox.create(room_id)
+            │    ├─ podman run -d --name sandbox-<slug> ...
+            │    ├─ _init_workspace(): writes GEMINI.md, status.md, AfterAgent hook
+            │    └─ save_state()
+            ├─ Send "⏳ Working on it..."
+            └─ agent.handle_message() → tool-calling loop → replies streamed back
+```
+
+### Subsequent messages (same room)
+
+```
+User message arrives
+  └─ _on_message: put(text) onto room's asyncio.Queue
+       ├─ If queue was empty → worker picks it up immediately
+       └─ If worker is busy → send "⏳ Queued (position N)" ack
+            └─ Worker processes in order, one message at a time
+```
+
+### Room close (bot kicked or last user leaves)
+
+```
+RoomMemberEvent received
+  └─ sandbox.destroy(room_id)
+       ├─ podman stop sandbox-<slug>
+       ├─ podman rm -f sandbox-<slug>
+       └─ save_state()
+  └─ _cancel_worker(room_id) — cancels asyncio.Task, drops Queue
+  └─ (if last user left) client.room_leave(room_id)
+```
+
+### Container naming
+
+Container names are derived deterministically from the Matrix room ID:
+
+```
+room_id:  !abc123:example.com
+slug:     -abc123-example-com   (non-alphanumeric → dash, leading dashes stripped)
+name:     sandbox--abc123-example-com
+```
+
+This makes containers identifiable in `podman ps` and survivable across bot restarts.
+
+### Per-room queue
+
+Each room has exactly one `asyncio.Queue` and one `asyncio.Task` (the worker). The worker
+is a `while True` loop that pulls messages and calls `_process_message` sequentially.
+Rooms are fully independent — a slow task in room A does not delay room B.
+
+```
+Room A queue:  [msg1] → processing   Room B queue:  [msg1, msg2]
+Room A worker: running _process_message(msg1)
+Room B worker: running _process_message(msg1), msg2 waiting
+```
+
+---
+
 ## Commands
 
 ```bash
