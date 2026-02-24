@@ -117,6 +117,8 @@ class SandboxManager:
         env_flags: list[str] = []
         if self.settings.gemini_api_key:
             env_flags += ["-e", f"GEMINI_API_KEY={self.settings.gemini_api_key}"]
+        if self.settings.github_token:
+            env_flags += ["-e", f"GITHUB_TOKEN={self.settings.github_token}"]
 
         rc, out, err = await self._run(
             "run", "-d",

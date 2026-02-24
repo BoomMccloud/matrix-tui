@@ -43,6 +43,8 @@ class Bot:
         if not self._synced:
             log.info("_on_invite SKIPPED (pre-sync) for %s by %s", room.room_id, event.sender)
             return
+        if event.state_key != self.client.user_id:
+            return
         log.info("_on_invite FIRED for %s by %s", room.room_id, event.sender)
         await self.client.join(room.room_id)
         await self.client.room_send(
