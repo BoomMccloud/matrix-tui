@@ -155,10 +155,7 @@ fi
 # 6. Register bot account
 # ------------------------------------------------------------------ #
 echo "==> Registering bot account: $BOT_LOCALPART"
-podman run --rm \
-    -v "$SYNAPSE_DATA:/data:Z" \
-    --network host \
-    "$SYNAPSE_IMAGE" register_new_matrix_user \
+podman exec synapse register_new_matrix_user \
     -u "$BOT_LOCALPART" \
     -p "$MATRIX_PASSWORD" \
     --no-admin \
@@ -170,10 +167,7 @@ podman run --rm \
 # ------------------------------------------------------------------ #
 if [[ -n "$MATRIX_ADMIN_PASSWORD" ]]; then
     echo "==> Registering admin account: $ADMIN_LOCALPART"
-    podman run --rm \
-        -v "$SYNAPSE_DATA:/data:Z" \
-        --network host \
-        "$SYNAPSE_IMAGE" register_new_matrix_user \
+    podman exec synapse register_new_matrix_user \
         -u "$ADMIN_LOCALPART" \
         -p "$MATRIX_ADMIN_PASSWORD" \
         --admin \
@@ -181,7 +175,7 @@ if [[ -n "$MATRIX_ADMIN_PASSWORD" ]]; then
         http://localhost:8008 || echo "(account may already exist, continuing)"
 else
     echo "==> Skipping admin account (MATRIX_ADMIN_PASSWORD not set)"
-    echo "    To create one later: podman run --rm -v $SYNAPSE_DATA:/data:Z --network host $SYNAPSE_IMAGE register_new_matrix_user -u admin -p PASSWORD --admin -c /data/homeserver.yaml http://localhost:8008"
+    echo "    To create one later: podman exec synapse register_new_matrix_user -u admin -p PASSWORD --admin -c /data/homeserver.yaml http://localhost:8008"
 fi
 
 # ------------------------------------------------------------------ #
