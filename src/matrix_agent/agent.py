@@ -60,12 +60,15 @@ class Agent:
         messages.append({"role": "user", "content": user_text})
 
         for turn in range(self.max_turns):
-            response = await litellm.acompletion(
+            kwargs = dict(
                 model=self.settings.llm_model,
                 messages=messages,
                 tools=TOOL_SCHEMAS,
                 api_key=self.settings.llm_api_key,
             )
+            if self.settings.llm_api_base:
+                kwargs["api_base"] = self.settings.llm_api_base
+            response = await litellm.acompletion(**kwargs)
 
             choice = response.choices[0]
             msg = choice.message

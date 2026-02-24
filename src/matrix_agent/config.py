@@ -21,6 +21,7 @@ class Settings(BaseSettings):
             self.matrix_homeserver = "https://matrix.org"
         return self
     llm_api_key: str
+    llm_api_base: str = ""
     llm_model: str = "openrouter/anthropic/claude-haiku-4-5"
     podman_path: str = "podman"
     sandbox_image: str = "matrix-agent-sandbox:latest"
