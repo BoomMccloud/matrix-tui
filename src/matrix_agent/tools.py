@@ -147,7 +147,7 @@ async def execute_tool(
     sandbox: SandboxManager, chat_id: str, name: str, arguments: str,
 ) -> tuple[str, bytes | None]:
     """Execute a tool call. Returns (text_result, optional_image_bytes)."""
-    args = json.loads(arguments)
+    args = json.loads(arguments) if arguments and arguments.strip() else {}
 
     if name == "run_command":
         rc, stdout, stderr = await sandbox.exec(chat_id, args["command"])
