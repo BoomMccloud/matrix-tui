@@ -13,14 +13,21 @@
 
 ---
 
-**Matrix Agent** brings an autonomous coding assistant directly into your Matrix chat rooms. Each room receives an isolated Podman container where the agent can write code, execute commands, take browser screenshots, and submit GitHub pull requests.
+**Matrix Agent** brings an autonomous coding assistant directly into your Matrix
+chat rooms. Each room receives an isolated Podman container where the agent can
+write code, execute commands, take browser screenshots, and submit GitHub pull
+requests.
 
 ## Features
 
-- **Isolated workspaces** — every Matrix room gets its own dedicated Podman sandbox container
-- **Full coding environment** — Python 3, Node.js 20, git, gh CLI, and Playwright pre-installed
-- **Gemini CLI inside the sandbox** — delegates heavy coding tasks to Gemini with 1M token context
-- **Multi-LLM orchestration** — powered by LiteLLM; use Claude, Gemini, or any OpenRouter model
+- **Isolated workspaces** — every Matrix room gets its own dedicated Podman
+  sandbox container
+- **Full coding environment** — Python 3, Node.js 20, git, gh CLI, and
+  Playwright pre-installed
+- **Gemini CLI inside the sandbox** — delegates heavy coding tasks to Gemini
+  with 1M token context
+- **Multi-LLM orchestration** — powered by LiteLLM; use Claude, Gemini, or any
+  OpenRouter model
 - **Streaming output** — Gemini's progress streams into the chat as it works
 - **GitHub integration** — agent can clone repos, push branches, and open PRs
 - **Self-updating** — agent can redeploy itself via the `self_update` tool
@@ -55,7 +62,8 @@ Matrix Bot (python-nio + LiteLLM)
 - [uv](https://github.com/astral-sh/uv) installed
 - LLM API key (OpenRouter, Gemini, etc.)
 - Gemini API key (for the in-sandbox coding agent)
-- GitHub fine-grained PAT with `contents: write` + `pull-requests: write` (optional)
+- GitHub fine-grained PAT with `contents: write` + `pull-requests: write`
+  (optional)
 
 ### Step 1 — Clone and configure
 
@@ -68,16 +76,16 @@ nano .env
 
 Fill in `.env` — at minimum:
 
-| Variable | Description |
-|----------|-------------|
-| `VPS_IP` | Your VPS public IP — homeserver URL, bot user, and admin user are all derived from this |
-| `MATRIX_PASSWORD` | Bot account password (you choose) |
-| `MATRIX_ADMIN_PASSWORD` | Your human account password (you choose) |
-| `LLM_API_KEY` | API key for the orchestrator LLM |
-| `LLM_MODEL` | e.g. `openrouter/anthropic/claude-sonnet-4` |
-| `GEMINI_API_KEY` | API key for the in-sandbox Gemini coding agent |
+| Variable                | Description                                                                             |
+| ----------------------- | --------------------------------------------------------------------------------------- |
+| `VPS_IP`                | Your VPS public IP — homeserver URL, bot user, and admin user are all derived from this |
+| `MATRIX_PASSWORD`       | Bot account password (you choose)                                                       |
+| `MATRIX_ADMIN_PASSWORD` | Your human account password (you choose)                                                |
+| `LLM_API_KEY`           | API key for the orchestrator LLM                                                        |
+| `GEMINI_API_KEY`        | API key for the in-sandbox Gemini coding agent                                          |
 
 If not self-hosting, override the derived values explicitly:
+
 ```env
 MATRIX_HOMESERVER = https://matrix.org
 MATRIX_USER = @mybot:matrix.org
@@ -86,13 +94,15 @@ MATRIX_ADMIN_USER = @me:matrix.org
 
 ### Step 2 — Set up the local Matrix homeserver (Synapse)
 
-This runs a local Synapse instance in a Podman container, creates both accounts, and configures systemd:
+This runs a local Synapse instance in a Podman container, creates both accounts,
+and configures systemd:
 
 ```bash
 bash scripts/setup-synapse.sh
 ```
 
 This script:
+
 1. Creates `/opt/synapse/data` and generates `homeserver.yaml`
 2. Patches the config for plain HTTP on port 8008, no federation
 3. Installs and starts a `synapse` systemd service
@@ -105,7 +115,8 @@ This script:
 podman build -t matrix-agent-sandbox:latest -f Containerfile .
 ```
 
-Install the bot as a systemd service (create `/etc/systemd/system/matrix-agent.service`):
+Install the bot as a systemd service (create
+`/etc/systemd/system/matrix-agent.service`):
 
 ```ini
 [Unit]
@@ -150,40 +161,41 @@ bash scripts/deploy.sh
 "redeploy yourself"
 ```
 
-The bot will run `git pull`, rebuild the sandbox image, send you the result, then restart itself.
+The bot will run `git pull`, rebuild the sandbox image, send you the result,
+then restart itself.
 
 ## Configuration reference
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `VPS_IP` | | VPS public IP, used by setup-synapse.sh |
-| `MATRIX_HOMESERVER` | `https://matrix.org` | Matrix homeserver URL |
-| `MATRIX_USER` | | Bot Matrix user ID |
-| `MATRIX_PASSWORD` | | Bot password |
-| `MATRIX_ADMIN_USER` | | Human admin Matrix user ID |
-| `MATRIX_ADMIN_PASSWORD` | | Human admin password |
-| `LLM_API_KEY` | | Orchestrator LLM API key |
-| `LLM_MODEL` | `openrouter/anthropic/claude-sonnet-4` | LiteLLM model string |
-| `GEMINI_API_KEY` | | Gemini API key for in-sandbox coding agent |
-| `GITHUB_TOKEN` | | Fine-grained PAT for GitHub PR submissions |
-| `PODMAN_PATH` | `podman` | Path to podman binary |
-| `SANDBOX_IMAGE` | `matrix-agent-sandbox:latest` | Sandbox image name |
-| `COMMAND_TIMEOUT_SECONDS` | `120` | Max time per shell command |
-| `CODING_TIMEOUT_SECONDS` | `1800` | Max time per Gemini CLI invocation |
-| `MAX_AGENT_TURNS` | `25` | Max LLM tool-call rounds per message |
-| `IPC_BASE_DIR` | `/tmp/sandbox-ipc` | Host directory for sandbox IPC files |
+| Variable                  | Default                                | Description                                |
+| ------------------------- | -------------------------------------- | ------------------------------------------ |
+| `VPS_IP`                  |                                        | VPS public IP, used by setup-synapse.sh    |
+| `MATRIX_HOMESERVER`       | `https://matrix.org`                   | Matrix homeserver URL                      |
+| `MATRIX_USER`             |                                        | Bot Matrix user ID                         |
+| `MATRIX_PASSWORD`         |                                        | Bot password                               |
+| `MATRIX_ADMIN_USER`       |                                        | Human admin Matrix user ID                 |
+| `MATRIX_ADMIN_PASSWORD`   |                                        | Human admin password                       |
+| `LLM_API_KEY`             |                                        | Orchestrator LLM API key                   |
+| `LLM_MODEL`               | `openrouter/anthropic/claude-sonnet-4` | LiteLLM model string                       |
+| `GEMINI_API_KEY`          |                                        | Gemini API key for in-sandbox coding agent |
+| `GITHUB_TOKEN`            |                                        | Fine-grained PAT for GitHub PR submissions |
+| `PODMAN_PATH`             | `podman`                               | Path to podman binary                      |
+| `SANDBOX_IMAGE`           | `matrix-agent-sandbox:latest`          | Sandbox image name                         |
+| `COMMAND_TIMEOUT_SECONDS` | `120`                                  | Max time per shell command                 |
+| `CODING_TIMEOUT_SECONDS`  | `1800`                                 | Max time per Gemini CLI invocation         |
+| `MAX_AGENT_TURNS`         | `25`                                   | Max LLM tool-call rounds per message       |
+| `IPC_BASE_DIR`            | `/tmp/sandbox-ipc`                     | Host directory for sandbox IPC files       |
 
 ## Agent tools
 
-| Tool | Runs on | Description |
-|------|---------|-------------|
-| `run_command` | Sandbox | Execute shell commands |
-| `write_file` | Sandbox | Write files into the container |
-| `read_file` | Sandbox | Read files from the container |
-| `code` | Sandbox | Delegate to Gemini CLI (streams output to chat) |
-| `run_tests` | Sandbox | Run ruff lint + pytest |
-| `take_screenshot` | Sandbox | Screenshot a URL via Playwright |
-| `self_update` | VPS host | git pull + rebuild image + restart service |
+| Tool              | Runs on  | Description                                     |
+| ----------------- | -------- | ----------------------------------------------- |
+| `run_command`     | Sandbox  | Execute shell commands                          |
+| `write_file`      | Sandbox  | Write files into the container                  |
+| `read_file`       | Sandbox  | Read files from the container                   |
+| `code`            | Sandbox  | Delegate to Gemini CLI (streams output to chat) |
+| `run_tests`       | Sandbox  | Run ruff lint + pytest                          |
+| `take_screenshot` | Sandbox  | Screenshot a URL via Playwright                 |
+| `self_update`     | VPS host | git pull + rebuild image + restart service      |
 
 ## Room lifecycle
 
@@ -194,17 +206,17 @@ The bot will run `git pull`, rebuild the sandbox image, send you the result, the
 
 ## Troubleshooting
 
-**Bot not responding after restart**
-The invite may have fired before the bot was ready. Leave and re-invite, or send a new message to an existing room.
+**Bot not responding after restart** The invite may have fired before the bot
+was ready. Leave and re-invite, or send a new message to an existing room.
 
-**Sync timeouts with matrix.org**
-matrix.org blocks long-poll connections from some VPS IPs. Use the local Synapse setup instead (`setup-synapse.sh`).
+**Sync timeouts with matrix.org** matrix.org blocks long-poll connections from
+some VPS IPs. Use the local Synapse setup instead (`setup-synapse.sh`).
 
-**Container creation fails**
-Check that the sandbox image was built: `podman images | grep matrix-agent-sandbox`
+**Container creation fails** Check that the sandbox image was built:
+`podman images | grep matrix-agent-sandbox`
 
-**Command timeout errors**
-Increase `COMMAND_TIMEOUT_SECONDS` in `.env` for slow operations like `npm install`.
+**Command timeout errors** Increase `COMMAND_TIMEOUT_SECONDS` in `.env` for slow
+operations like `npm install`.
 
 ## Documentation
 

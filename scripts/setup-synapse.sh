@@ -32,10 +32,10 @@ if [[ -z "$MATRIX_PASSWORD" ]]; then
     echo "ERROR: MATRIX_PASSWORD not set in .env"
     exit 1
 fi
-if [[ -z "$MATRIX_ADMIN_USER" || -z "$MATRIX_ADMIN_PASSWORD" ]]; then
-    echo "ERROR: MATRIX_ADMIN_USER and MATRIX_ADMIN_PASSWORD not set in .env"
-    exit 1
-fi
+
+# Derive defaults from VPS_IP if not explicitly set
+[[ -z "$MATRIX_USER" ]] && MATRIX_USER="@matrixbot:${VPS_IP}"
+[[ -z "$MATRIX_ADMIN_USER" ]] && MATRIX_ADMIN_USER="@admin:${VPS_IP}"
 
 # Extract localpart from @localpart:server (e.g. @matrixbot:1.2.3.4 -> matrixbot)
 BOT_LOCALPART=$(echo "$MATRIX_USER" | sed 's/@\([^:]*\):.*/\1/')
@@ -168,16 +168,21 @@ podman run --rm \
 # ------------------------------------------------------------------ #
 # 7. Register admin (human) account
 # ------------------------------------------------------------------ #
-echo "==> Registering admin account: $ADMIN_LOCALPART"
-podman run --rm \
-    -v "$SYNAPSE_DATA:/data:Z" \
-    --network host \
-    "$SYNAPSE_IMAGE" register_new_matrix_user \
-    -u "$ADMIN_LOCALPART" \
-    -p "$MATRIX_ADMIN_PASSWORD" \
-    --admin \
-    -c /data/homeserver.yaml \
-    http://localhost:8008 || echo "(account may already exist, continuing)"
+if [[ -n "$MATRIX_ADMIN_PASSWORD" ]]; then
+    echo "==> Registering admin account: $ADMIN_LOCALPART"
+    podman run --rm \
+        -v "$SYNAPSE_DATA:/data:Z" \
+        --network host \
+        "$SYNAPSE_IMAGE" register_new_matrix_user \
+        -u "$ADMIN_LOCALPART" \
+        -p "$MATRIX_ADMIN_PASSWORD" \
+        --admin \
+        -c /data/homeserver.yaml \
+        http://localhost:8008 || echo "(account may already exist, continuing)"
+else
+    echo "==> Skipping admin account (MATRIX_ADMIN_PASSWORD not set)"
+    echo "    To create one later: podman run --rm -v $SYNAPSE_DATA:/data:Z --network host $SYNAPSE_IMAGE register_new_matrix_user -u admin -p PASSWORD --admin -c /data/homeserver.yaml http://localhost:8008"
+fi
 
 # ------------------------------------------------------------------ #
 # 8. Update matrix-agent service to depend on synapse
