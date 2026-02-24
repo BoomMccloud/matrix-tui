@@ -146,6 +146,8 @@ class Bot:
         """Cleanup when bot is kicked or last user leaves."""
         if not self._synced:
             return
+        log.info("Member event in %s: %s -> %s (state_key=%s)",
+                 room.room_id, event.prev_membership, event.membership, event.state_key)
 
         if event.state_key == self.client.user_id and event.membership in ("leave", "ban"):
             log.info("Bot removed from %s — destroying sandbox", room.room_id)
@@ -247,9 +249,25 @@ class Bot:
 
         self.client.add_response_callback(on_sync, SyncResponse)
 
+        reconcile_task = asyncio.create_task(self._reconcile_loop())
         try:
             await self.client.sync_forever(timeout=30000)
         finally:
+            reconcile_task.cancel()
             log.info("Shutting down — destroying all sandboxes")
             await self.sandbox.destroy_all()
             await self.client.close()
+
+    async def _reconcile_loop(self):
+        """Periodically destroy containers for rooms the bot is no longer in."""
+        while True:
+            await asyncio.sleep(60)
+            try:
+                joined = set(self.client.rooms.keys())
+                for chat_id in list(self.sandbox._containers):
+                    if chat_id not in joined:
+                        log.info("Reconcile: destroying orphaned container for %s", chat_id)
+                        await self.sandbox.destroy(chat_id)
+                        self._cancel_worker(chat_id)
+            except Exception:
+                log.exception("Reconcile loop error")
