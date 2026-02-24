@@ -7,12 +7,20 @@ import os
 import re
 import shutil
 import tempfile
+from collections.abc import Awaitable, Callable
+from typing import Any
 
 from .config import Settings
 
 log = logging.getLogger(__name__)
 
 STATE_PATH = "/home/matrix-tui/state.json"
+
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*[mABCDEFGHJKSTfisu]")
+
+
+def _strip_ansi(text: str) -> str:
+    return _ANSI_RE.sub("", text)
 
 
 def _container_name(chat_id: str) -> str:
@@ -325,6 +333,62 @@ echo '{"continue": true}'
         shutil.rmtree(ipc_host, ignore_errors=True)
         log.info("Destroyed container %s for chat %s", name, chat_id)
         self.save_state()
+
+    async def code_stream(
+        self,
+        chat_id: str,
+        task: str,
+        on_chunk: Callable[[str], Awaitable[Any]],
+        chunk_size: int = 800,
+    ) -> tuple[int, str, str]:
+        """Run Gemini CLI, streaming stdout to on_chunk() as it arrives."""
+        name = self._containers.get(chat_id)
+        if not name:
+            raise RuntimeError(f"No container for chat {chat_id}")
+
+        proc = await asyncio.create_subprocess_exec(
+            self.podman, "exec", "--workdir", "/workspace", name,
+            "gemini", "-p", task,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+
+        stdout_parts: list[str] = []
+        stderr_parts: list[str] = []
+        buffer: list[str] = []
+
+        async def flush():
+            if buffer:
+                await on_chunk("".join(buffer))
+                buffer.clear()
+
+        async def read_stdout():
+            assert proc.stdout is not None
+            async for raw in proc.stdout:
+                line = _strip_ansi(raw.decode(errors="replace"))
+                stdout_parts.append(line)
+                buffer.append(line)
+                if sum(len(b) for b in buffer) >= chunk_size:
+                    await flush()
+
+        async def read_stderr():
+            assert proc.stderr is not None
+            async for raw in proc.stderr:
+                stderr_parts.append(raw.decode(errors="replace"))
+
+        try:
+            await asyncio.wait_for(
+                asyncio.gather(read_stdout(), read_stderr()),
+                timeout=self.settings.coding_timeout_seconds,
+            )
+        except asyncio.TimeoutError:
+            proc.kill()
+            await flush()
+            return 1, "".join(stdout_parts), f"Command timed out after {self.settings.coding_timeout_seconds}s"
+
+        await flush()
+        await proc.wait()
+        return proc.returncode or 0, "".join(stdout_parts), "".join(stderr_parts)
 
     async def code(self, chat_id: str, task: str) -> tuple[int, str, str]:
         """Run Gemini CLI on a task. Task passed as direct argv — no shell escaping needed.

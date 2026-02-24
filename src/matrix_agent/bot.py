@@ -112,8 +112,15 @@ class Bot:
         container_name = self.sandbox._containers.get(room_id)
         typing_task = asyncio.create_task(self._keep_typing(room_id))
         ipc_task = asyncio.create_task(self._watch_ipc(room_id, container_name)) if container_name else None
+
+        async def send_update(chunk: str) -> None:
+            await self.client.room_send(
+                room_id, "m.room.message",
+                {"msgtype": "m.text", "body": f"```\n{chunk.strip()}\n```"},
+            )
+
         try:
-            async for reply_text, image in self.agent.handle_message(room_id, text):
+            async for reply_text, image in self.agent.handle_message(room_id, text, send_update=send_update):
                 if image:
                     await self._send_image(room_id, image)
                 if reply_text:

@@ -54,7 +54,7 @@ class Agent:
             self._histories[chat_id] = [{"role": "system", "content": SYSTEM_PROMPT}]
         return self._histories[chat_id]
 
-    async def handle_message(self, chat_id: str, user_text: str):
+    async def handle_message(self, chat_id: str, user_text: str, send_update=None):
         """Process a user message. Yields (text, image_bytes|None) tuples."""
         messages = self._get_history(chat_id)
         messages.append({"role": "user", "content": user_text})
@@ -83,6 +83,7 @@ class Agent:
                 log.info("Tool call: %s(%s)", tc.function.name, tc.function.arguments[:100])
                 text_result, image = await execute_tool(
                     self.sandbox, chat_id, tc.function.name, tc.function.arguments,
+                    send_update=send_update,
                 )
                 messages.append({
                     "role": "tool",

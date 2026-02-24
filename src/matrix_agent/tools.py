@@ -145,6 +145,7 @@ TOOL_SCHEMAS = [
 
 async def execute_tool(
     sandbox: SandboxManager, chat_id: str, name: str, arguments: str,
+    send_update=None,
 ) -> tuple[str, bytes | None]:
     """Execute a tool call. Returns (text_result, optional_image_bytes)."""
     args = json.loads(arguments) if arguments and arguments.strip() else {}
@@ -172,7 +173,10 @@ async def execute_tool(
         return result, None
 
     if name == "code":
-        rc, stdout, stderr = await sandbox.code(chat_id, args["task"])
+        if send_update:
+            rc, stdout, stderr = await sandbox.code_stream(chat_id, args["task"], send_update)
+        else:
+            rc, stdout, stderr = await sandbox.code(chat_id, args["task"])
         output = stdout
         if stderr:
             output += f"\nSTDERR:\n{stderr}"
