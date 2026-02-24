@@ -58,6 +58,7 @@ class Bot:
             return
         if not self._synced:
             return
+        log.info("Message from %s in %s: %s", event.sender, room.room_id, event.body[:80])
 
         room_id = room.room_id
         text = event.body
@@ -138,7 +139,7 @@ class Bot:
             if ipc_task:
                 ipc_task.cancel()
             typing_task.cancel()
-            await self.client.room_typing(room_id, typing=False)
+            await self.client.room_typing(room_id, typing_state=False)
 
     async def _on_member(self, room, event):
         """Cleanup when bot is kicked or last user leaves."""
@@ -191,7 +192,7 @@ class Bot:
         """Send typing indicator every 20s until cancelled."""
         try:
             while True:
-                await self.client.room_typing(room_id, typing=True, timeout=30000)
+                await self.client.room_typing(room_id, typing_state=True, timeout=30000)
                 await asyncio.sleep(20)
         except asyncio.CancelledError:
             pass
