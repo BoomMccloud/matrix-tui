@@ -72,7 +72,22 @@ class Agent:
 
             choice = response.choices[0]
             msg = choice.message
-            messages.append(msg.model_dump(exclude_none=True))
+            # Build a clean assistant message dict for history.
+            # Some providers (e.g. MiniMax) are strict about the format.
+            assistant_msg: dict = {"role": "assistant", "content": msg.content or ""}
+            if msg.tool_calls:
+                assistant_msg["tool_calls"] = [
+                    {
+                        "id": tc.id,
+                        "type": "function",
+                        "function": {
+                            "name": tc.function.name,
+                            "arguments": tc.function.arguments,
+                        },
+                    }
+                    for tc in msg.tool_calls
+                ]
+            messages.append(assistant_msg)
 
             # If no tool calls, we have a final text response
             if not msg.tool_calls:

@@ -103,7 +103,6 @@ TOOL_SCHEMAS = [
                         "description": "Directory to run tests in. Defaults to /workspace.",
                     },
                 },
-                "required": [],
             },
         },
     },
@@ -119,7 +118,6 @@ TOOL_SCHEMAS = [
             "parameters": {
                 "type": "object",
                 "properties": {},
-                "required": [],
             },
         },
     },
