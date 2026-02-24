@@ -226,7 +226,9 @@ class Bot:
         self.client.add_event_callback(self._on_message, RoomMessageText)
         self.client.add_event_callback(self._on_member, RoomMemberEvent)
 
-        await self.client.sync(timeout=10000)
+        log.info("Starting initial sync...")
+        resp = await self.client.sync(timeout=10000)
+        log.info("Initial sync result: %s", type(resp).__name__)
 
         # Auto-join pending invites from before startup (no greeting — stale invites)
         for room_id in list(self.client.invited_rooms):
