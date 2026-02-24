@@ -12,6 +12,7 @@ from nio import (
     LoginResponse,
     RoomMemberEvent,
     RoomMessageText,
+    SyncResponse,
     UploadResponse,
 )
 
@@ -238,6 +239,11 @@ class Bot:
 
         self._synced = True
         log.info("Initial sync complete, now listening")
+
+        async def on_sync(response):
+            log.info("Sync OK: next_batch=%s", response.next_batch)
+
+        self.client.add_response_callback(on_sync, SyncResponse)
 
         try:
             await self.client.sync_forever(timeout=30000)
