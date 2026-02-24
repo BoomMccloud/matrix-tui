@@ -8,6 +8,8 @@ class Settings(BaseSettings):
     matrix_homeserver: str = "https://matrix.org"
     matrix_user: str
     matrix_password: str
+    matrix_admin_user: str = ""
+    matrix_admin_password: str = ""
     llm_api_key: str
     llm_model: str = "openrouter/anthropic/claude-haiku-4-5"
     podman_path: str = "podman"

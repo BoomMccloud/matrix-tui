@@ -40,8 +40,11 @@ fi
 # Extract localpart from @localpart:server (e.g. @matrixbot:1.2.3.4 -> matrixbot)
 BOT_LOCALPART=$(echo "$MATRIX_USER" | sed 's/@\([^:]*\):.*/\1/')
 
+ADMIN_LOCALPART=$(echo "$MATRIX_ADMIN_USER" | sed 's/@\([^:]*\):.*/\1/')
+
 echo "==> VPS_IP:       $VPS_IP"
 echo "==> Bot account:  $MATRIX_USER"
+echo "==> Admin account: $MATRIX_ADMIN_USER"
 echo ""
 
 # ------------------------------------------------------------------ #
@@ -163,7 +166,21 @@ podman run --rm \
     http://localhost:8008 || echo "(account may already exist, continuing)"
 
 # ------------------------------------------------------------------ #
-# 7. Update matrix-agent service to depend on synapse
+# 7. Register admin (human) account
+# ------------------------------------------------------------------ #
+echo "==> Registering admin account: $ADMIN_LOCALPART"
+podman run --rm \
+    -v "$SYNAPSE_DATA:/data:Z" \
+    --network host \
+    "$SYNAPSE_IMAGE" register_new_matrix_user \
+    -u "$ADMIN_LOCALPART" \
+    -p "$MATRIX_ADMIN_PASSWORD" \
+    --admin \
+    -c /data/homeserver.yaml \
+    http://localhost:8008 || echo "(account may already exist, continuing)"
+
+# ------------------------------------------------------------------ #
+# 8. Update matrix-agent service to depend on synapse
 # ------------------------------------------------------------------ #
 AGENT_SERVICE="/etc/systemd/system/matrix-agent.service"
 if [[ -f "$AGENT_SERVICE" ]]; then
