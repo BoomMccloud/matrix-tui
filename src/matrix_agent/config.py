@@ -4,6 +4,7 @@ from pydantic_settings import BaseSettings
 class Settings(BaseSettings):
     model_config = {"env_prefix": "", "env_file": ".env"}
 
+    vps_ip: str = ""
     matrix_homeserver: str = "https://matrix.org"
     matrix_user: str
     matrix_password: str
