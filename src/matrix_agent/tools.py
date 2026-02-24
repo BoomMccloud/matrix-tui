@@ -112,7 +112,7 @@ TOOL_SCHEMAS = [
         "function": {
             "name": "self_update",
             "description": (
-                "Update the bot itself on the VPS host: runs git pull then restarts the systemd service. "
+                "Update the bot itself on the VPS host: runs deploy.sh (git pull + rebuild sandbox image + restart service). "
                 "Use this when the user asks to update the bot, pull latest changes, or restart the service. "
                 "This operates on the HOST, not inside the sandbox container."
             ),
@@ -207,35 +207,30 @@ async def execute_tool(
 
 
 async def _self_update() -> str:
-    """Run git pull then restart the systemd service on the host."""
-    async def run(cmd: list[str]) -> tuple[int, str]:
-        proc = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.STDOUT,
-            cwd="/home/matrix-tui",
-        )
-        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=60)
-        return proc.returncode or 0, stdout.decode().strip()
+    """Run deploy.sh on the host (git pull + rebuild sandbox image + restart service)."""
+    script = "/home/matrix-tui/scripts/deploy.sh"
+    log.info("self_update: running %s", script)
 
-    log.info("self_update: running git pull")
-    rc, out = await run(["git", "pull"])
-    if rc != 0:
-        return f"git pull failed (exit {rc}):\n{out}"
-
-    pull_output = out
-    log.info("self_update: restarting matrix-agent service")
-
-    # Restart is fire-and-forget — the process will be killed mid-response,
-    # so we send the pull result before the restart takes effect.
-    asyncio.create_task(_delayed_restart())
-
-    return f"git pull:\n{pull_output}\n\nRestarting service in 2s..."
-
-
-async def _delayed_restart():
-    await asyncio.sleep(2)
     proc = await asyncio.create_subprocess_exec(
-        "systemctl", "restart", "matrix-agent",
+        script,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.STDOUT,
+        cwd="/home/matrix-tui",
     )
-    await proc.wait()
+
+    # Capture output up until the service restart kills us.
+    # We fire the wait in a task so we can return partial output quickly.
+    asyncio.create_task(_wait_deploy(proc))
+    await asyncio.sleep(2)
+
+    # Read whatever output is available so far
+    assert proc.stdout is not None
+    output = await proc.stdout.read(4096)
+    return f"deploy.sh output (may be truncated — service restarting):\n{output.decode().strip()}"
+
+
+async def _wait_deploy(proc):
+    try:
+        await asyncio.wait_for(proc.wait(), timeout=120)
+    except Exception:
+        pass

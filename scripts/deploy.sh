@@ -1,6 +1,6 @@
 #!/bin/bash
 # deploy.sh — pull latest code, rebuild sandbox image, restart the bot service.
-# Run from /home/matrix-tui on the VPS as root.
+# Used by both humans (run directly) and the self_update agent tool.
 
 set -e
 
@@ -19,6 +19,4 @@ podman build -t "$IMAGE" -f Containerfile .
 echo "==> restarting $SERVICE"
 systemctl restart "$SERVICE"
 
-echo "==> waiting for service to come up..."
-sleep 3
-systemctl status "$SERVICE" --no-pager
+echo "==> done"
