@@ -8,7 +8,7 @@ set -e
 REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 ENV_FILE="$REPO_DIR/.env"
 SYNAPSE_DATA="/opt/synapse/data"
-SYNAPSE_IMAGE="matrixdotorg/synapse:latest"
+SYNAPSE_IMAGE="docker.io/matrixdotorg/synapse:latest"
 SYNAPSE_SERVICE="/etc/systemd/system/synapse.service"
 
 # ------------------------------------------------------------------ #
