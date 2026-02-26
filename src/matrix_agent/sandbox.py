@@ -213,13 +213,13 @@ This file is your instruction set. It is loaded automatically on every invocatio
         ]
       }
     ],
-    "UserInputRequired": [
+    "Notification": [
       {
         "hooks": [
           {
             "name": "notify-matrix",
             "type": "command",
-            "command": "/workspace/.gemini/hooks/user-input-required.sh",
+            "command": "/workspace/.gemini/hooks/notification.sh",
             "timeout": 5000
           }
         ]
@@ -239,12 +239,12 @@ echo "[$timestamp] Gemini session completed" >> /workspace/status.md
 echo '{"continue": true}'
 """)
 
-        await write("/workspace/.gemini/hooks/user-input-required.sh", """\
+        await write("/workspace/.gemini/hooks/notification.sh", """\
 #!/bin/sh
-# UserInputRequired hook — writes sentinel file to IPC dir for host watcher.
-input=$(cat)
-echo "$input" > /workspace/.ipc/needs_input.json
-echo '{"continue": true}'
+# Notification hook — writes sentinel file to IPC dir for host watcher.
+# Gemini sends JSON on stdin with message, notification_type, details fields.
+cat > /workspace/.ipc/notification.json
+echo '{}'
 """)
 
         # Make hooks executable
@@ -252,7 +252,7 @@ echo '{"continue": true}'
             "exec", container_name,
             "chmod", "+x",
             "/workspace/.gemini/hooks/after-agent.sh",
-            "/workspace/.gemini/hooks/user-input-required.sh",
+            "/workspace/.gemini/hooks/notification.sh",
         )
 
     async def exec(self, chat_id: str, command: str) -> tuple[int, str, str]:
@@ -342,10 +342,13 @@ echo '{"continue": true}'
         chunk_size: int = 800,
     ) -> tuple[int, str, str]:
         """Run Gemini CLI, streaming stdout to on_chunk() as it arrives."""
+        import time
         name = self._containers.get(chat_id)
         if not name:
             raise RuntimeError(f"No container for chat {chat_id}")
 
+        log.info("[%s] Gemini starting: %s", name, task[:200])
+        t0 = time.monotonic()
         proc = await asyncio.create_subprocess_exec(
             self.podman, "exec", "--workdir", "/workspace", name,
             "gemini", "-p", task,
@@ -384,11 +387,17 @@ echo '{"continue": true}'
         except asyncio.TimeoutError:
             proc.kill()
             await flush()
+            elapsed = time.monotonic() - t0
+            log.warning("[%s] Gemini timed out after %.0fs", name, elapsed)
             return 1, "".join(stdout_parts), f"Command timed out after {self.settings.coding_timeout_seconds}s"
 
         await flush()
         await proc.wait()
-        return proc.returncode or 0, "".join(stdout_parts), "".join(stderr_parts)
+        elapsed = time.monotonic() - t0
+        rc = proc.returncode or 0
+        stdout_len = sum(len(s) for s in stdout_parts)
+        log.info("[%s] Gemini finished in %.1fs (exit=%d, stdout=%d chars)", name, elapsed, rc, stdout_len)
+        return rc, "".join(stdout_parts), "".join(stderr_parts)
 
     async def code(self, chat_id: str, task: str) -> tuple[int, str, str]:
         """Run Gemini CLI on a task. Task passed as direct argv — no shell escaping needed.

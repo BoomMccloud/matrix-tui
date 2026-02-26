@@ -169,9 +169,9 @@ class Bot:
         self._queues.pop(room_id, None)
 
     async def _watch_ipc(self, room_id: str, container_name: str) -> None:
-        """Poll for IPC sentinel file and send Matrix notification when found."""
+        """Poll for IPC notification file and send Matrix notification when found."""
         ipc_file = os.path.join(
-            self.settings.ipc_base_dir, container_name, "needs_input.json"
+            self.settings.ipc_base_dir, container_name, "notification.json"
         )
         try:
             while True:
@@ -180,13 +180,19 @@ class Bot:
                     try:
                         with open(ipc_file) as f:
                             data = json.load(f)
-                        prompt = data.get("prompt", "input required")
+                        ntype = data.get("notification_type", "unknown")
+                        message = data.get("message", "")
+                        details = data.get("details", {})
+                        body = f"⚠️ Gemini [{ntype}]: {message}"
+                        if details:
+                            body += f"\nDetails: {json.dumps(details, indent=2)}"
                     except Exception:
-                        prompt = "input required"
+                        body = "⚠️ Gemini notification (could not parse)"
+                    log.info("[%s] IPC notification: %s", container_name, body[:200])
                     os.unlink(ipc_file)
                     await self.client.room_send(
                         room_id, "m.room.message",
-                        {"msgtype": "m.text", "body": f"⚠️ Agent needs input: {prompt}"},
+                        {"msgtype": "m.text", "body": body},
                     )
         except asyncio.CancelledError:
             pass

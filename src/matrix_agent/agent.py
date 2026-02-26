@@ -1,6 +1,7 @@
 """LLM agent with tool-calling loop."""
 
 import logging
+import time
 
 import litellm
 
@@ -58,8 +59,11 @@ class Agent:
         """Process a user message. Yields (text, image_bytes|None) tuples."""
         messages = self._get_history(chat_id)
         messages.append({"role": "user", "content": user_text})
+        log.info("[%s] User message: %s", chat_id[:20], user_text[:200])
 
         for turn in range(self.max_turns):
+            log.info("[%s] Turn %d/%d — calling LLM (%s)", chat_id[:20], turn + 1, self.max_turns, self.settings.llm_model)
+            t0 = time.monotonic()
             kwargs = dict(
                 model=self.settings.llm_model,
                 messages=messages,
@@ -69,6 +73,8 @@ class Agent:
             if self.settings.llm_api_base:
                 kwargs["api_base"] = self.settings.llm_api_base
             response = await litellm.acompletion(**kwargs)
+            llm_elapsed = time.monotonic() - t0
+            log.info("[%s] LLM responded in %.1fs", chat_id[:20], llm_elapsed)
 
             choice = response.choices[0]
             msg = choice.message
@@ -91,6 +97,7 @@ class Agent:
 
             # If no tool calls, we have a final text response
             if not msg.tool_calls:
+                log.info("[%s] Final response on turn %d: %s", chat_id[:20], turn + 1, (msg.content or "")[:200])
                 if msg.content:
                     self.sandbox.save_state()
                     yield msg.content, None
@@ -98,11 +105,14 @@ class Agent:
 
             # Execute each tool call
             for tc in msg.tool_calls:
-                log.info("Tool call: %s(%s)", tc.function.name, tc.function.arguments[:100])
+                log.info("[%s] Tool call: %s(%s)", chat_id[:20], tc.function.name, tc.function.arguments[:200])
+                t0 = time.monotonic()
                 text_result, image = await execute_tool(
                     self.sandbox, chat_id, tc.function.name, tc.function.arguments,
                     send_update=send_update,
                 )
+                tool_elapsed = time.monotonic() - t0
+                log.info("[%s] Tool %s completed in %.1fs (result: %d chars)", chat_id[:20], tc.function.name, tool_elapsed, len(text_result))
                 messages.append({
                     "role": "tool",
                     "tool_call_id": tc.id,
@@ -111,5 +121,6 @@ class Agent:
                 if image:
                     yield None, image
 
+        log.warning("[%s] Hit max turns (%d)", chat_id[:20], self.max_turns)
         self.sandbox.save_state()
         yield "Reached maximum turns. Here's where I got to — let me know if you'd like me to continue.", None
