@@ -16,7 +16,7 @@ The orchestrator decides which agent to call based on the task. This is a routin
 Add after the Gemini CLI install line:
 
 ```dockerfile
-RUN npm install -g @qwen-code/qwen-code@latest
+RUN npm install -g @qwen/qwen@latest
 ```
 
 ### 2. sandbox.py — parameterize CLI binary
@@ -49,7 +49,7 @@ Same change for `code()`. The `cli` parameter defaults to `"gemini"` for backwar
 
 **Note:** Verify that Qwen Code accepts `-p` for prompt mode. If it uses a different flag, add a lookup:
 ```python
-CLI_FLAGS = {"gemini": ["-p"], "qwen-code": ["-p"]}  # adjust as needed
+CLI_FLAGS = {"gemini": ["-p"], "qwen": ["-p"]}  # adjust as needed
 ```
 
 ### 3. tools.py — split into three tools
@@ -127,7 +127,7 @@ if name == "plan":
     ...
 
 if name == "implement":
-    rc, stdout, stderr = await sandbox.code_stream(chat_id, args["task"], send_update, cli="qwen-code")
+    rc, stdout, stderr = await sandbox.code_stream(chat_id, args["task"], send_update, cli="qwen")
     ...
 
 if name == "review":
@@ -183,7 +183,7 @@ This can be deferred until we know what config Qwen Code supports.
 ## Verification
 
 1. Rebuild container: `podman build -t matrix-agent-sandbox:latest -f Containerfile .`
-2. Verify both CLIs exist: `podman exec <container> which gemini && podman exec <container> which qwen-code`
+2. Verify both CLIs exist: `podman exec <container> which gemini && podman exec <container> which qwen`
 3. Test each tool manually:
    - `plan`: send a planning task, verify Gemini output streams to Matrix
    - `implement`: send an implementation task, verify Qwen output streams

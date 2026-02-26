@@ -67,19 +67,60 @@ TOOL_SCHEMAS = [
     {
         "type": "function",
         "function": {
-            "name": "code",
+            "name": "plan",
             "description": (
-                "Delegate a coding or analysis task to Gemini CLI (1M token context). "
-                "Use this for writing new code, bug fixes, refactoring, code review, "
-                "and explaining how a codebase works. Gemini can read entire repos at once. "
-                "The task is passed safely without shell escaping issues."
+                "Ask Gemini CLI to plan, analyze, or explain (1M token context). "
+                "Use for: writing implementation plans, analyzing codebases, first-principles thinking, "
+                "checking if a solution is the simplest approach. Gemini can read entire repos at once."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "task": {
                         "type": "string",
-                        "description": "What to code, analyze, or explain. Be specific about files and goals.",
+                        "description": "What to plan or analyze. Be specific about goals and constraints.",
+                    },
+                },
+                "required": ["task"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "implement",
+            "description": (
+                "Ask Qwen Code to write or modify code. "
+                "Use for: implementing features, fixing bugs, refactoring, writing tests. "
+                "Pass the plan or requirements in the task description."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "task": {
+                        "type": "string",
+                        "description": "What to implement. Include the plan, specific files, and acceptance criteria.",
+                    },
+                },
+                "required": ["task"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "review",
+            "description": (
+                "Ask Gemini CLI to review code changes (1M token context). "
+                "Use after implementation to check for bugs, security issues, "
+                "missed edge cases, and adherence to project conventions."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "task": {
+                        "type": "string",
+                        "description": "What to review. Reference specific files or describe what changed.",
                     },
                 },
                 "required": ["task"],
@@ -170,11 +211,12 @@ async def execute_tool(
             result = result[:10000] + "\n... (truncated)"
         return result, None
 
-    if name == "code":
+    if name in ("plan", "implement", "review"):
+        cli = "qwen" if name == "implement" else "gemini"
         if send_update:
-            rc, stdout, stderr = await sandbox.code_stream(chat_id, args["task"], send_update)
+            rc, stdout, stderr = await sandbox.code_stream(chat_id, args["task"], send_update, cli=cli)
         else:
-            rc, stdout, stderr = await sandbox.code(chat_id, args["task"])
+            rc, stdout, stderr = await sandbox.code(chat_id, args["task"], cli=cli)
         output = stdout
         if stderr:
             output += f"\nSTDERR:\n{stderr}"

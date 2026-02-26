@@ -125,6 +125,8 @@ class SandboxManager:
         env_flags: list[str] = []
         if self.settings.gemini_api_key:
             env_flags += ["-e", f"GEMINI_API_KEY={self.settings.gemini_api_key}"]
+        if self.settings.dashscope_api_key:
+            env_flags += ["-e", f"DASHSCOPE_API_KEY={self.settings.dashscope_api_key}"]
         if self.settings.github_token:
             env_flags += ["-e", f"GITHUB_TOKEN={self.settings.github_token}"]
 
@@ -247,6 +249,24 @@ cat > /workspace/.ipc/notification.json
 echo '{}'
 """)
 
+        # Qwen Code settings — DashScope international endpoint
+        await write("/root/.qwen/settings.json", """\
+{
+  "modelProviders": {
+    "openai": [
+      {
+        "id": "qwen3-coder-next",
+        "name": "qwen3-coder-next",
+        "baseUrl": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+        "envKey": "DASHSCOPE_API_KEY"
+      }
+    ]
+  },
+  "security": { "auth": { "selectedType": "openai" } },
+  "model": { "name": "qwen3-coder-next" }
+}
+""")
+
         # Make hooks executable
         await self._run(
             "exec", container_name,
@@ -339,19 +359,20 @@ echo '{}'
         chat_id: str,
         task: str,
         on_chunk: Callable[[str], Awaitable[Any]],
+        cli: str = "gemini",
         chunk_size: int = 800,
     ) -> tuple[int, str, str]:
-        """Run Gemini CLI, streaming stdout to on_chunk() as it arrives."""
+        """Run a coding CLI, streaming stdout to on_chunk() as it arrives."""
         import time
         name = self._containers.get(chat_id)
         if not name:
             raise RuntimeError(f"No container for chat {chat_id}")
 
-        log.info("[%s] Gemini starting: %s", name, task[:200])
+        log.info("[%s] %s starting: %s", name, cli, task[:200])
         t0 = time.monotonic()
         proc = await asyncio.create_subprocess_exec(
             self.podman, "exec", "--workdir", "/workspace", name,
-            "gemini", "-p", task,
+            cli, "-p", task,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
@@ -388,7 +409,7 @@ echo '{}'
             proc.kill()
             await flush()
             elapsed = time.monotonic() - t0
-            log.warning("[%s] Gemini timed out after %.0fs", name, elapsed)
+            log.warning("[%s] %s timed out after %.0fs", name, cli, elapsed)
             return 1, "".join(stdout_parts), f"Command timed out after {self.settings.coding_timeout_seconds}s"
 
         await flush()
@@ -396,18 +417,18 @@ echo '{}'
         elapsed = time.monotonic() - t0
         rc = proc.returncode or 0
         stdout_len = sum(len(s) for s in stdout_parts)
-        log.info("[%s] Gemini finished in %.1fs (exit=%d, stdout=%d chars)", name, elapsed, rc, stdout_len)
+        log.info("[%s] %s finished in %.1fs (exit=%d, stdout=%d chars)", name, cli, elapsed, rc, stdout_len)
         return rc, "".join(stdout_parts), "".join(stderr_parts)
 
-    async def code(self, chat_id: str, task: str) -> tuple[int, str, str]:
-        """Run Gemini CLI on a task. Task passed as direct argv — no shell escaping needed.
-        Runs from /workspace so GEMINI.md is auto-loaded by Gemini CLI."""
+    async def code(self, chat_id: str, task: str, cli: str = "gemini") -> tuple[int, str, str]:
+        """Run a coding CLI on a task. Task passed as direct argv — no shell escaping needed.
+        Runs from /workspace so context files are auto-loaded."""
         name = self._containers.get(chat_id)
         if not name:
             raise RuntimeError(f"No container for chat {chat_id}")
         return await self._run(
             "exec", "--workdir", "/workspace", name,
-            "gemini", "-p", task,
+            cli, "-p", task,
             timeout=self.settings.coding_timeout_seconds,
         )
 

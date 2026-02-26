@@ -21,8 +21,9 @@ RUN curl -LsSf https://astral.sh/uv/install.sh | sh
 ENV PATH="/root/.local/bin:$PATH"
 RUN uv tool install ruff && uv tool install pytest
 
-# Gemini CLI coding agent
+# Coding agents
 RUN npm install -g @google/gemini-cli
+RUN npm install -g @qwen-code/qwen-code@latest
 
 WORKDIR /workspace
 CMD ["sleep", "infinity"]
