@@ -4,7 +4,7 @@
 
 ## Overview
 
-A self-hosted agentic coding assistant accessible via Matrix chat. Each room gets an isolated Podman sandbox container. The orchestrator (Claude Sonnet via LiteLLM) routes tasks to tools; heavy coding is delegated to Gemini CLI running inside the sandbox.
+A self-hosted agentic coding assistant accessible via Matrix chat. Each room gets an isolated Podman sandbox container. The orchestrator (Haiku via LiteLLM) routes tasks to two coding agents: Gemini CLI for planning/review and Qwen Code for implementation.
 
 ## Architecture
 
@@ -15,20 +15,22 @@ Synapse homeserver (self-hosted, port 8008, no federation)
        |
 Matrix Bot  (python-nio + LiteLLM)
        |
-Claude Sonnet (orchestrator)
+Haiku (orchestrator)
        |
 Tools ─────────────────────────────────────────────────────────
+  plan            → podman exec gemini -p (Gemini CLI, planning/analysis)
+  implement       → podman exec qwen -p (Qwen Code, writes code)
+  review          → podman exec gemini -p (Gemini CLI, code review)
   run_command     → podman exec (shell commands in sandbox)
   write_file      → podman exec (write files in sandbox)
   read_file       → podman exec (read files in sandbox)
-  code            → podman exec gemini -p (Gemini CLI, streams output)
   run_tests       → podman exec ruff + pytest
   take_screenshot → podman exec playwright + podman cp
   self_update     → git pull + podman build + systemctl restart (host)
        |
 Podman sandbox container (one per room)
   - Node.js 20, Python 3, git, gh CLI, Playwright
-  - Gemini CLI for coding tasks
+  - Gemini CLI for planning/review, Qwen Code for implementation
   - GITHUB_TOKEN for repo access and PR submission
 ```
 
@@ -36,10 +38,10 @@ Podman sandbox container (one per room)
 
 - **Self-hosted Synapse over matrix.org.** matrix.org blocks long-poll sync connections from VPS IPs. Running Synapse locally on port 8008 (plain HTTP, no federation) eliminates this entirely.
 - **Subprocess over podman-py.** `podman exec` via `asyncio.create_subprocess_exec` is simpler and more debuggable. No SDK quirks.
-- **Gemini CLI as coding agent.** 1M token context — can read entire repos. Orchestrator delegates non-trivial coding to it rather than doing it directly. Gemini output streams to the Matrix room.
+- **Two coding agents.** Gemini CLI (1M context) handles planning and review — can read entire repos. Qwen Code handles implementation. The orchestrator routes by task type via `plan`, `implement`, `review` tools.
 - **One container per room.** Full isolation. Container is created on first message, destroyed when all users leave.
 - **State persisted to disk.** `state.json` on the host maps room IDs to container names and stores conversation history. Containers survive bot restarts.
-- **Gemini hooks for IPC.** `UserInputRequired` hook writes a sentinel file to a bind-mounted host directory. Bot polls for it and sends a Matrix notification.
+- **Notification hooks for IPC.** Gemini's `Notification` hook writes events to a bind-mounted host directory. Bot polls and sends Matrix notifications. See `notification_hook.md`.
 - **Self-updating.** Agent calls `self_update` tool → git pull + image rebuild + service restart. Sends result before restart kills the process.
 
 ## Stack
@@ -50,7 +52,8 @@ Podman sandbox container (one per room)
 - **pydantic-settings** — env-based configuration
 - **Podman** (CLI via subprocess) — container lifecycle
 - **Playwright** — headless browser screenshots (inside sandbox)
-- **Gemini CLI** — coding agent inside sandbox
+- **Gemini CLI** — planning/review agent inside sandbox
+- **Qwen Code** — implementation agent inside sandbox
 - **gh CLI** — GitHub PR submission inside sandbox
 - **Synapse** — self-hosted Matrix homeserver (Podman container)
 
@@ -58,7 +61,7 @@ Podman sandbox container (one per room)
 
 ```
 matrix-tui/
-├── Containerfile                    # Sandbox image (Node + Python + Playwright + Gemini + gh)
+├── Containerfile                    # Sandbox image (Node + Python + Playwright + Gemini + Qwen + gh)
 ├── scripts/
 │   ├── setup-synapse.sh             # One-time Synapse homeserver setup
 │   └── deploy.sh                    # Manual deploy (git pull + image rebuild + restart)
@@ -77,8 +80,8 @@ matrix-tui/
 
 1. **Invite** — bot joins and sends greeting
 2. **First message** — sandbox container created, workspace initialized (`GEMINI.md`, `status.md`, hooks)
-3. **Tasks** — Sonnet routes tool calls; Gemini output streams to chat in ~800-char chunks
-4. **Input required** — if Gemini needs input, IPC hook notifies the Matrix room
+3. **Tasks** — orchestrator routes to plan/implement/review; agent output streams to chat in ~800-char chunks
+4. **Notifications** — Gemini `Notification` hook surfaces events (e.g. ToolPermission) to the Matrix room
 5. **Cleanup** — container and IPC directory destroyed when all users leave or bot is kicked
 
 ## Deployment
@@ -93,10 +96,10 @@ Summary:
 
 ## Roadmap
 
-### Step 1 — Multi-agent routing (intermediate)
-Split the single `code` tool into `plan` (Gemini), `implement` (Qwen Code), and `review` (Gemini). The orchestrator routes by task type. Same one-shot `-p` mode, no structural changes. See `multi_agent_routing.md`.
+### ~~Step 1 — Multi-agent routing~~ ✓ Done
+Implemented. `plan` and `review` route to Gemini CLI, `implement` routes to Qwen Code. See `multi_agent_routing.md`.
 
-### Step 2 — tmux persistent sessions
+### Step 2 — tmux persistent sessions (next)
 Run each agent (Gemini, Qwen) in its own tmux session inside the container. Enables context persistence across invocations and bidirectional communication (orchestrator can answer agent questions mid-task). See `tmux_gemini_sessions.md`.
 
 ### Step 3 — Structured programming loop

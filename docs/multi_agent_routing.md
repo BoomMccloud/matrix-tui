@@ -1,8 +1,10 @@
 # Multi-Agent Routing — Gemini for Planning, Qwen for Implementation
 
+> **Status: Implemented.** See commit `cb4af59`.
+
 ## Context
 
-The orchestrator currently routes all coding tasks to Gemini CLI via a single `code` tool. The original architecture planned multiple agents with task-type routing (see `coding-agents-spec.md`). This spec adds Qwen Code as a second agent, splitting responsibilities:
+The orchestrator previously routed all coding tasks to Gemini CLI via a single `code` tool. This change split it into three tools with two agents:
 
 - **Gemini CLI** (1M context) — planning, analysis, code review, explaining codebases
 - **Qwen Code** — implementation, bug fixes, refactoring, writing code
@@ -158,19 +160,24 @@ but each agent invocation is independent — include the plan in the implement()
 and describe what changed in the review() task.
 ```
 
-### 5. Workspace context for Qwen
+### 5. Qwen Code auth config
 
-Qwen Code may need its own workspace context file (like `GEMINI.md` for Gemini). Add to `_init_workspace()` in sandbox.py:
+Qwen Code requires `~/.qwen/settings.json` for auth. Written by `_init_workspace()` in sandbox.py. Uses DashScope international endpoint with `DASHSCOPE_API_KEY` env var:
 
-```python
-await write("/workspace/.qwen/settings.json", """\
+```json
 {
-  ... # Qwen-specific config, TBD based on Qwen Code docs
+  "modelProviders": {
+    "openai": [{
+      "id": "qwen3-coder-next",
+      "name": "qwen3-coder-next",
+      "baseUrl": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+      "envKey": "DASHSCOPE_API_KEY"
+    }]
+  },
+  "security": { "auth": { "selectedType": "openai" } },
+  "model": { "name": "qwen3-coder-next" }
 }
-""")
 ```
-
-This can be deferred until we know what config Qwen Code supports.
 
 ## What Does NOT Change
 
@@ -180,16 +187,18 @@ This can be deferred until we know what config Qwen Code supports.
 - **Container lifecycle** — same create/destroy, same one-per-room model
 - **Notification hook** — still works, only applies to Gemini sessions
 
-## Verification
+## Testing
 
-1. Rebuild container: `podman build -t matrix-agent-sandbox:latest -f Containerfile .`
-2. Verify both CLIs exist: `podman exec <container> which gemini && podman exec <container> which qwen`
-3. Test each tool manually:
-   - `plan`: send a planning task, verify Gemini output streams to Matrix
-   - `implement`: send an implementation task, verify Qwen output streams
-   - `review`: send a review task, verify Gemini output streams
-4. Test the full workflow: plan → implement → run_tests → review in a single conversation
-5. Lint: `uv run ruff check src tests`
+```bash
+# Unit + scenario tests
+uv run pytest tests/
+
+# Integration test (requires API keys in .env)
+podman build -t matrix-agent-sandbox:latest -f Containerfile .
+bash scripts/test-multi-agent.sh
+```
+
+The integration test verifies both CLIs are installed, auth is configured, and both respond to `-p` mode. It exits non-zero on failure — suitable for gating deploys.
 
 ## Future
 
