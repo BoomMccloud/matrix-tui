@@ -46,7 +46,7 @@ Every sandbox has persistent context files that Gemini reads automatically:
 
 **AfterAgent hook** — after every Gemini session, appends a timestamped entry to `status.md` automatically.
 
-**UserInputRequired hook** — if Gemini needs human input, writes a sentinel file to `/workspace/.ipc/needs_input.json`. The bot polls for this file and sends a Matrix notification within ~1s.
+**Notification hook** — when Gemini fires a `Notification` event (e.g. `ToolPermission`), a hook writes the event JSON to `/workspace/.ipc/notification.json`. The bot polls for this file and sends a formatted Matrix notification within ~1s. See `notification_hook.md`.
 
 ## Gemini Settings
 
@@ -56,11 +56,16 @@ Hooks are configured in `/workspace/.gemini/settings.json` on container creation
 {
   "hooks": {
     "AfterAgent": [...],
-    "UserInputRequired": [...]
+    "Notification": [...]
   }
 }
 ```
 
-## Future
+## Next Step — Multi-Agent Routing
 
-The original spec planned three agents (Qwen Code, Aider, Gemini CLI) with the orchestrator routing between them based on task type. This was simplified to Gemini-only since it handles all task types adequately with its 1M context. The routing logic can be added back if Gemini proves insufficient for specific scenarios (e.g. Aider's git workflow integration).
+The original spec planned multiple agents with the orchestrator routing between them. This is now being implemented:
+
+- **Gemini CLI** — planning, analysis, code review (1M context for whole-repo reasoning)
+- **Qwen Code** — implementation, bug fixes, refactoring
+
+The `code` tool splits into `plan` (Gemini), `implement` (Qwen), and `review` (Gemini). See `multi_agent_routing.md` for the full spec. After routing works, tmux persistent sessions enable context persistence and bidirectional communication — see `tmux_gemini_sessions.md`.

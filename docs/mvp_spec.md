@@ -91,9 +91,17 @@ Summary:
 3. Build sandbox image + install systemd service
 4. Connect Element to `http://<VPS_IP>:8008`, invite the bot
 
-## Future
+## Roadmap
 
-- Non-blocking tool calls (Sonnet responds while Gemini works)
+### Step 1 — Multi-agent routing (intermediate)
+Split the single `code` tool into `plan` (Gemini), `implement` (Qwen Code), and `review` (Gemini). The orchestrator routes by task type. Same one-shot `-p` mode, no structural changes. See `multi_agent_routing.md`.
+
+### Step 2 — tmux persistent sessions
+Run each agent (Gemini, Qwen) in its own tmux session inside the container. Enables context persistence across invocations and bidirectional communication (orchestrator can answer agent questions mid-task). See `tmux_gemini_sessions.md`.
+
+### Step 3 — Structured programming loop
+`/spec → /analyze → /verify → /go` workflow using the plan/implement/review tools with tmux sessions. Requires non-blocking tool calls so the bot can accept commands while agents work. See `programming-loop-spec.md`.
+
+### Other
 - Resource limits (`--memory`, `--cpus`) on sandbox containers
 - E2EE support
-- Multiple concurrent coding agents per room
