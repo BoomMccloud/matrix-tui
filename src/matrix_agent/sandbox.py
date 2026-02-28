@@ -361,6 +361,7 @@ echo '{}'
         on_chunk: Callable[[str], Awaitable[Any]],
         cli: str = "gemini",
         chunk_size: int = 800,
+        auto_accept: bool = False,
     ) -> tuple[int, str, str]:
         """Run a coding CLI, streaming stdout to on_chunk() as it arrives."""
         import time
@@ -368,11 +369,16 @@ echo '{}'
         if not name:
             raise RuntimeError(f"No container for chat {chat_id}")
 
+        cli_args = [cli]
+        if auto_accept:
+            cli_args.append("-y")
+        cli_args += ["-p", task]
+
         log.info("[%s] %s starting: %s", name, cli, task[:200])
         t0 = time.monotonic()
         proc = await asyncio.create_subprocess_exec(
             self.podman, "exec", "--workdir", "/workspace", name,
-            cli, "-p", task,
+            *cli_args,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
@@ -420,15 +426,19 @@ echo '{}'
         log.info("[%s] %s finished in %.1fs (exit=%d, stdout=%d chars)", name, cli, elapsed, rc, stdout_len)
         return rc, "".join(stdout_parts), "".join(stderr_parts)
 
-    async def code(self, chat_id: str, task: str, cli: str = "gemini") -> tuple[int, str, str]:
+    async def code(self, chat_id: str, task: str, cli: str = "gemini", auto_accept: bool = False) -> tuple[int, str, str]:
         """Run a coding CLI on a task. Task passed as direct argv — no shell escaping needed.
         Runs from /workspace so context files are auto-loaded."""
         name = self._containers.get(chat_id)
         if not name:
             raise RuntimeError(f"No container for chat {chat_id}")
+        cli_args = [cli]
+        if auto_accept:
+            cli_args.append("-y")
+        cli_args += ["-p", task]
         return await self._run(
             "exec", "--workdir", "/workspace", name,
-            cli, "-p", task,
+            *cli_args,
             timeout=self.settings.coding_timeout_seconds,
         )
 

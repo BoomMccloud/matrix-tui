@@ -105,6 +105,50 @@ Run each agent (Gemini, Qwen) in its own tmux session inside the container. Enab
 ### Step 3 — Structured programming loop
 `/spec → /analyze → /verify → /go` workflow using the plan/implement/review tools with tmux sessions. Requires non-blocking tool calls so the bot can accept commands while agents work. See `programming-loop-spec.md`.
 
+### Step 4 — Channel-agnostic task pipeline
+
+#### Phase 1 — GitHub webhook + blocking execution ✓ Done
+- `channels.py`: `Task` dataclass, `ChannelAdapter` ABC, `GitHubChannel` (HMAC-verified webhook, `POST /webhook/github`)
+- `core.py`: `AgentCore.submit()` — creates container, clones repo, runs `code_stream()` with `auto_accept=True`, fires `on_result`/`on_error` callbacks
+- `sandbox.py`: `auto_accept` flag on `code()` and `code_stream()` (passes `-y` to Gemini CLI)
+- Blocking model: `submit()` awaits the full Gemini run before returning
+
+#### Phase 2 — Hook-driven event model (non-blocking)
+Replace blocking `code_stream()` with fire-and-forget execution. Gemini CLI hooks handle state transitions via IPC files on the bind-mounted `.ipc/` directory.
+
+**Hooks to wire up** (see [Gemini CLI hook events](https://googlegemini.wiki/gemini-cli/hooks)):
+
+| Hook | Purpose |
+|---|---|
+| `SessionStart` | Inject task context (`task.json`) into Gemini's context — richer than cramming into `-p` |
+| `AfterAgent` | **Completion signal.** Write `result.json` to IPC with status/stdout/error. Can `retry` or `halt` |
+| `AfterTool` | Streaming progress — write `progress.json` after each tool execution |
+| `BeforeTool` | Gate dangerous ops (block writes outside `/workspace`, destructive commands) |
+| `Notification` | Forward advisory messages to channel (already wired for Matrix) |
+| `SessionEnd` | Final cleanup, mark task done/failed in IPC |
+| `PreCompress` | Checkpoint save before context compression on long tasks |
+
+**Architecture change:**
+```
+core.submit()  →  launch gemini (fire-and-forget)
+                     │
+                     ├─ SessionStart hook reads .ipc/task.json, injects context
+                     ├─ AfterTool hook writes .ipc/progress.json
+                     ├─ AfterAgent hook writes .ipc/result.json
+                     └─ SessionEnd hook writes .ipc/done.json
+
+Host IPC watcher (single asyncio loop per container)
+  watches $ipc_base_dir/sandbox-*/
+  dispatches → ChannelAdapter.deliver_result / deliver_error / deliver_progress
+```
+
+**Benefits over Phase 1:**
+- Non-blocking: doesn't tie up an asyncio task per running Gemini session
+- Streaming progress to GitHub/Matrix before task completes
+- Retry/escalation logic lives inside the container (AfterAgent can halt or retry)
+- BeforeTool gating adds policy enforcement inside Gemini's own loop
+- UserInputRequired escalation via IPC (write file, host responds or escalates to channel)
+
 ### Other
 - Resource limits (`--memory`, `--cpus`) on sandbox containers
 - E2EE support
