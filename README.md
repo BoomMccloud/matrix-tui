@@ -24,11 +24,13 @@ requests.
   sandbox container
 - **Full coding environment** — Python 3, Node.js 20, git, gh CLI, and
   Playwright pre-installed
-- **Gemini CLI inside the sandbox** — delegates heavy coding tasks to Gemini
-  with 1M token context
+- **Multi-agent routing** — Haiku orchestrator delegates `plan`/`review` to
+  Gemini CLI (1M context) and `implement` to Qwen Code
+- **Hook-driven IPC** — Gemini hooks and a Qwen wrapper write progress/result
+  events to `/workspace/.ipc/`, streamed to Matrix in real time
 - **Multi-LLM orchestration** — powered by LiteLLM; use Claude, Gemini, or any
   OpenRouter model
-- **Streaming output** — Gemini's progress streams into the chat as it works
+- **Streaming output** — coding agent progress streams into the chat as it works
 - **GitHub integration** — agent can clone repos, push branches, and open PRs
 - **Self-updating** — agent can redeploy itself via the `self_update` tool
 - **Unencrypted rooms only** — E2EE is not supported
@@ -42,10 +44,17 @@ Matrix Homeserver (self-hosted Synapse)
        |
 Matrix Bot (python-nio + LiteLLM)
        |
-  Sonnet (orchestrator) ──> Tools: run_command, write_file, read_file,
-       |                           take_screenshot, code, self_update
+  Haiku (orchestrator) ──> Tools: run_command, write_file, read_file,
+       |                          take_screenshot, plan, implement,
+       |                          review, run_tests, self_update
        |
-  Gemini CLI (coding agent, runs inside sandbox container)
+  ┌────┴────┐
+  │         │
+Gemini    Qwen Code
+(plan/    (implement,
+ review)   auto-accept)
+       |
+  IPC hooks → event-result.json / event-progress.json → Matrix
        |
   Podman sandbox container (one per room)
        |
@@ -82,7 +91,8 @@ Fill in `.env` — at minimum:
 | `MATRIX_PASSWORD`       | Bot account password (you choose)                                                       |
 | `MATRIX_ADMIN_PASSWORD` | Your human account password (you choose)                                                |
 | `LLM_API_KEY`           | API key for the orchestrator LLM                                                        |
-| `GEMINI_API_KEY`        | API key for the in-sandbox Gemini coding agent                                          |
+| `GEMINI_API_KEY`        | API key for Gemini (plan/review agent)                                                  |
+| `DASHSCOPE_API_KEY`     | API key for Qwen Code (implement agent)                                                 |
 
 If not self-hosting, override the derived values explicitly:
 
@@ -176,7 +186,8 @@ then restart itself.
 | `MATRIX_ADMIN_PASSWORD`   |                                        | Human admin password                       |
 | `LLM_API_KEY`             |                                        | Orchestrator LLM API key                   |
 | `LLM_MODEL`               | `openrouter/anthropic/claude-sonnet-4` | LiteLLM model string                       |
-| `GEMINI_API_KEY`          |                                        | Gemini API key for in-sandbox coding agent |
+| `GEMINI_API_KEY`          |                                        | Gemini API key for plan/review agent       |
+| `DASHSCOPE_API_KEY`       |                                        | DashScope API key for Qwen implement agent |
 | `GITHUB_TOKEN`            |                                        | Fine-grained PAT for GitHub PR submissions |
 | `PODMAN_PATH`             | `podman`                               | Path to podman binary                      |
 | `SANDBOX_IMAGE`           | `matrix-agent-sandbox:latest`          | Sandbox image name                         |
@@ -187,15 +198,46 @@ then restart itself.
 
 ## Agent tools
 
-| Tool              | Runs on  | Description                                     |
-| ----------------- | -------- | ----------------------------------------------- |
-| `run_command`     | Sandbox  | Execute shell commands                          |
-| `write_file`      | Sandbox  | Write files into the container                  |
-| `read_file`       | Sandbox  | Read files from the container                   |
-| `code`            | Sandbox  | Delegate to Gemini CLI (streams output to chat) |
-| `run_tests`       | Sandbox  | Run ruff lint + pytest                          |
-| `take_screenshot` | Sandbox  | Screenshot a URL via Playwright                 |
-| `self_update`     | VPS host | git pull + rebuild image + restart service      |
+| Tool              | Runs on  | CLI     | Description                                     |
+| ----------------- | -------- | ------- | ----------------------------------------------- |
+| `run_command`     | Sandbox  |         | Execute shell commands                          |
+| `write_file`      | Sandbox  |         | Write files into the container                  |
+| `read_file`       | Sandbox  |         | Read files from the container                   |
+| `plan`            | Sandbox  | Gemini  | Plan, analyze, or explain (1M token context)    |
+| `implement`       | Sandbox  | Qwen    | Write or modify code (auto-accept mode)         |
+| `review`          | Sandbox  | Gemini  | Review code changes for bugs and issues         |
+| `run_tests`       | Sandbox  |         | Run ruff lint + pytest                          |
+| `take_screenshot` | Sandbox  |         | Screenshot a URL via Playwright                 |
+| `self_update`     | VPS host |         | git pull + rebuild image + restart service      |
+
+## IPC events
+
+Sandbox containers communicate back to the host via JSON files written to
+`/workspace/.ipc/` (bind-mounted to the host). The bot polls these files and
+forwards them to Matrix.
+
+| File                   | Written by           | Purpose                                |
+| ---------------------- | -------------------- | -------------------------------------- |
+| `event-result.json`    | AfterAgent hook / Qwen wrapper | Agent session completed       |
+| `event-progress.json`  | AfterTool hook       | Tool completed (Gemini only)           |
+| `notification.json`    | Notification hook    | Gemini needs attention                 |
+| `hook-errors.log`      | All hooks/wrapper    | Stderr from hook failures              |
+
+## Diagnostics
+
+Check IPC logs and hook setup for all running containers:
+
+```bash
+# Check a specific container
+IPC_BASE_DIR=/tmp/sandbox-ipc bash scripts/check-ipc-logs.sh sandbox-myroom
+
+# Auto-discover all sandbox-* containers
+IPC_BASE_DIR=/tmp/sandbox-ipc bash scripts/check-ipc-logs.sh
+```
+
+The script verifies: IPC directory exists, hook scripts are executable, Gemini
+settings.json has all hook events registered, qwen wrapper exists, and
+`hook-errors.log` is empty.
 
 ## Room lifecycle
 
@@ -217,6 +259,28 @@ some VPS IPs. Use the local Synapse setup instead (`setup-synapse.sh`).
 
 **Command timeout errors** Increase `COMMAND_TIMEOUT_SECONDS` in `.env` for slow
 operations like `npm install`.
+
+## Development
+
+```bash
+# Run the bot locally
+uv run python -m matrix_agent
+
+# Run unit tests
+uv run pytest tests/ -v
+
+# Run integration tests (needs podman + API keys)
+uv run --env-file .env pytest tests/test_integration.py -v -s
+
+# Lint
+uv run ruff check src tests
+
+# Rebuild sandbox image
+podman build -t matrix-agent-sandbox:latest -f Containerfile .
+
+# Check IPC logs on a running container
+IPC_BASE_DIR=/tmp/sandbox-ipc bash scripts/check-ipc-logs.sh
+```
 
 ## Documentation
 

@@ -213,6 +213,7 @@ async def execute_tool(
 
     if name in ("plan", "implement", "review"):
         cli = "qwen" if name == "implement" else "gemini"
+        log.info("Routing %s → %s", name, cli)
         if send_update:
             rc, stdout, stderr = await sandbox.code_stream(chat_id, args["task"], send_update, cli=cli)
         else:

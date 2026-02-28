@@ -215,6 +215,18 @@ This file is your instruction set. It is loaded automatically on every invocatio
         ]
       }
     ],
+    "AfterTool": [
+      {
+        "hooks": [
+          {
+            "name": "progress-ipc",
+            "type": "command",
+            "command": "/workspace/.gemini/hooks/after-tool.sh",
+            "timeout": 5000
+          }
+        ]
+      }
+    ],
     "Notification": [
       {
         "hooks": [
@@ -233,12 +245,21 @@ This file is your instruction set. It is loaded automatically on every invocatio
 
         await write("/workspace/.gemini/hooks/after-agent.sh", """\
 #!/bin/sh
-# AfterAgent hook — appends timestamp to status.md and exits cleanly.
+# AfterAgent hook — writes result to IPC, appends timestamp to status.md.
 # Reads JSON from stdin (Gemini hook protocol), writes JSON to stdout.
 input=$(cat)
+echo "$input" > /workspace/.ipc/event-result.json 2>> /workspace/.ipc/hook-errors.log
 timestamp=$(date '+%Y-%m-%d %H:%M')
-echo "[$timestamp] Gemini session completed" >> /workspace/status.md
+echo "[$timestamp] Gemini session completed" >> /workspace/status.md 2>> /workspace/.ipc/hook-errors.log
 echo '{"continue": true}'
+""")
+
+        await write("/workspace/.gemini/hooks/after-tool.sh", """\
+#!/bin/sh
+# AfterTool hook — writes tool progress to IPC for host watcher.
+input=$(cat)
+echo "$input" > /workspace/.ipc/event-progress.json 2>> /workspace/.ipc/hook-errors.log
+echo '{}'
 """)
 
         await write("/workspace/.gemini/hooks/notification.sh", """\
@@ -247,6 +268,24 @@ echo '{"continue": true}'
 # Gemini sends JSON on stdin with message, notification_type, details fields.
 cat > /workspace/.ipc/notification.json
 echo '{}'
+""")
+
+        # Qwen wrapper — captures output and writes IPC event-result.json (no hook support)
+        await write("/workspace/.qwen-wrapper.sh", """\
+#!/bin/sh
+# Wrapper for qwen CLI — writes event-result.json on completion.
+# Usage: .qwen-wrapper.sh "prompt text"
+output=$(qwen -y -p "$1" 2>&1) || true
+rc=$?
+timestamp=$(date '+%Y-%m-%dT%H:%M:%S')
+cat > /workspace/.ipc/event-result.json <<IPCEOF
+{"cli": "qwen", "exit_code": $rc, "timestamp": "$timestamp"}
+IPCEOF
+if [ $rc -ne 0 ]; then
+  echo "wrapper error: qwen exited $rc" >> /workspace/.ipc/hook-errors.log
+fi
+echo "$output"
+exit $rc
 """)
 
         # Qwen Code settings — DashScope international endpoint
@@ -272,7 +311,9 @@ echo '{}'
             "exec", container_name,
             "chmod", "+x",
             "/workspace/.gemini/hooks/after-agent.sh",
+            "/workspace/.gemini/hooks/after-tool.sh",
             "/workspace/.gemini/hooks/notification.sh",
+            "/workspace/.qwen-wrapper.sh",
         )
 
     async def exec(self, chat_id: str, command: str) -> tuple[int, str, str]:
@@ -369,10 +410,14 @@ echo '{}'
         if not name:
             raise RuntimeError(f"No container for chat {chat_id}")
 
-        cli_args = [cli]
-        if auto_accept:
-            cli_args.append("-y")
-        cli_args += ["-p", task]
+        # Use qwen wrapper when auto_accept — it writes IPC event-result.json
+        if cli == "qwen" and auto_accept:
+            cli_args = ["/workspace/.qwen-wrapper.sh", task]
+        else:
+            cli_args = [cli]
+            if auto_accept:
+                cli_args.append("-y")
+            cli_args += ["-p", task]
 
         log.info("[%s] %s starting: %s", name, cli, task[:200])
         t0 = time.monotonic()

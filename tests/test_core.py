@@ -1,10 +1,7 @@
 """Tests for AgentCore — channel-agnostic autonomous task execution."""
 
-import asyncio
-import json
-import os
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock
 
 import pytest
 

@@ -169,33 +169,55 @@ class Bot:
         self._queues.pop(room_id, None)
 
     async def _watch_ipc(self, room_id: str, container_name: str) -> None:
-        """Poll for IPC notification file and send Matrix notification when found."""
-        ipc_file = os.path.join(
-            self.settings.ipc_base_dir, container_name, "notification.json"
-        )
+        """Poll for IPC files (notification, progress, result) and send Matrix messages."""
+        ipc_dir = os.path.join(self.settings.ipc_base_dir, container_name)
         try:
             while True:
                 await asyncio.sleep(1)
-                if os.path.exists(ipc_file):
+                for filename, formatter in (
+                    ("notification.json", self._format_notification),
+                    ("event-progress.json", self._format_progress),
+                    ("event-result.json", self._format_result),
+                ):
+                    filepath = os.path.join(ipc_dir, filename)
+                    if not os.path.exists(filepath):
+                        continue
                     try:
-                        with open(ipc_file) as f:
+                        with open(filepath) as f:
                             data = json.load(f)
-                        ntype = data.get("notification_type", "unknown")
-                        message = data.get("message", "")
-                        details = data.get("details", {})
-                        body = f"⚠️ Gemini [{ntype}]: {message}"
-                        if details:
-                            body += f"\nDetails: {json.dumps(details, indent=2)}"
+                        log.info("[%s] IPC %s: %s", container_name, filename, json.dumps(data)[:300])
+                        body = formatter(data)
                     except Exception:
-                        body = "⚠️ Gemini notification (could not parse)"
-                    log.info("[%s] IPC notification: %s", container_name, body[:200])
-                    os.unlink(ipc_file)
+                        log.exception("[%s] Failed to parse IPC %s", container_name, filename)
+                        body = f"⚠️ IPC event ({filename}, could not parse)"
+                    os.unlink(filepath)
                     await self.client.room_send(
                         room_id, "m.room.message",
                         {"msgtype": "m.text", "body": body},
                     )
         except asyncio.CancelledError:
             pass
+
+    @staticmethod
+    def _format_notification(data: dict) -> str:
+        ntype = data.get("notification_type", "unknown")
+        message = data.get("message", "")
+        details = data.get("details", {})
+        body = f"⚠️ Gemini [{ntype}]: {message}"
+        if details:
+            body += f"\nDetails: {json.dumps(details, indent=2)}"
+        return body
+
+    @staticmethod
+    def _format_progress(data: dict) -> str:
+        tool_name = data.get("tool_name", data.get("name", "unknown"))
+        return f"🔧 Tool completed: {tool_name}"
+
+    @staticmethod
+    def _format_result(data: dict) -> str:
+        cli = data.get("cli", "gemini")
+        exit_code = data.get("exit_code", "?")
+        return f"✅ Agent finished ({cli}, exit {exit_code})"
 
     async def _keep_typing(self, room_id: str) -> None:
         """Send typing indicator every 20s until cancelled."""

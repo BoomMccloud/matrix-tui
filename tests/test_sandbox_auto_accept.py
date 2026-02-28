@@ -1,6 +1,5 @@
 """Tests for sandbox auto_accept flag (gemini -y autonomous mode)."""
 
-import asyncio
 from unittest.mock import AsyncMock, patch
 
 import pytest

@@ -6,10 +6,13 @@ Requirements:
 - Sandbox image built: podman build -t matrix-agent-sandbox:latest -f Containerfile .
 """
 
+import json
 import logging
 import os
 import shutil
+import time
 from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -23,6 +26,8 @@ log = logging.getLogger(__name__)
 
 _has_podman = shutil.which("podman") is not None
 _has_gemini_key = bool(os.environ.get("GEMINI_API_KEY", ""))
+_has_llm_key = bool(os.environ.get("LLM_API_KEY", ""))
+_has_dashscope = bool(os.environ.get("DASHSCOPE_API_KEY", ""))
 
 pytestmark = [
     pytest.mark.skipif(not _has_podman, reason="podman not on PATH"),
@@ -145,17 +150,82 @@ async def test_container_creation_and_cleanup(sandbox):
     assert "integ-lifecycle" not in sandbox._containers
 
 
+async def _dump_hook_errors(sandbox, chat_id):
+    """Helper: dump hook-errors.log on test failure for debugging."""
+    try:
+        rc, stdout, _ = await sandbox.exec(chat_id, "cat /workspace/.ipc/hook-errors.log 2>/dev/null")
+        if rc == 0 and stdout.strip():
+            log.error("hook-errors.log for %s:\n%s", chat_id, stdout)
+    except Exception:
+        pass
+
+
 @pytest.mark.asyncio
-@pytest.mark.xfail(reason="IPC watching not implemented yet (phase 2)")
-async def test_ipc_needs_help(core, sandbox, settings):
-    """Container writes needs_help.json to .ipc/ → core detects it."""
-    task = Task(
-        task_id="integ-ipc",
-        description='Write a file /workspace/.ipc/needs_help.json with content: {"question": "What should I do?"}',
-        source="test",
-    )
+async def test_ipc_event_files_written(settings, sandbox, core):
+    """After a gemini run with hooks, event-result.json exists in IPC dir."""
+    task = Task(task_id="integ-ipc-2", description="echo hello", source="test")
 
-    await core.submit(task, on_result=lambda r: None, on_error=lambda e: None)
+    try:
+        await core.submit(task, on_result=AsyncMock())
+    except Exception:
+        await _dump_hook_errors(sandbox, "integ-ipc-2")
+        raise
 
-    ipc_path = os.path.join(settings.ipc_base_dir, "sandbox-integ-ipc", "needs_help.json")
-    assert os.path.exists(ipc_path), f"needs_help.json not found at {ipc_path}"
+    ipc_dir = os.path.join(settings.ipc_base_dir, "sandbox-integ-ipc-2")
+    result_file = os.path.join(ipc_dir, "event-result.json")
+    assert os.path.exists(result_file), "AfterAgent hook didn't write event-result.json"
+
+    with open(result_file) as f:
+        data = json.load(f)
+    # Should contain AfterAgent hook payload
+    assert isinstance(data, dict)
+
+
+@pytest.mark.asyncio
+@pytest.mark.skipif(
+    not (_has_podman and _has_gemini_key and _has_llm_key),
+    reason="needs podman + GEMINI_API_KEY + LLM_API_KEY",
+)
+async def test_orchestrator_multi_agent_events(settings, sandbox):
+    """Full pipeline: Agent → Haiku routes to plan (gemini) + implement (qwen) → IPC events logged."""
+    from matrix_agent.agent import Agent
+    from matrix_agent.tools import execute_tool
+
+    agent = Agent(settings, sandbox)
+
+    # Collect all tool calls and their order
+    tool_log = []
+    original_execute = execute_tool
+
+    async def logging_execute(sandbox, chat_id, name, arguments, send_update=None):
+        tool_log.append({"tool": name, "time": time.monotonic()})
+        return await original_execute(sandbox, chat_id, name, arguments, send_update=send_update)
+
+    # Patch execute_tool to log ordering
+    with patch("matrix_agent.agent.execute_tool", logging_execute):
+        results = []
+        try:
+            async for text, image in agent.handle_message(
+                "test-multi",
+                "Create a file /workspace/is_palindrome.py with a function is_palindrome(s) that returns True if s is a palindrome. Use plan() first, then implement()."
+            ):
+                if text:
+                    results.append(text)
+        except Exception:
+            await _dump_hook_errors(sandbox, "test-multi")
+            raise
+
+    # Verify multi-agent routing happened
+    tool_names = [t["tool"] for t in tool_log]
+    assert "plan" in tool_names, f"Expected plan tool call, got: {tool_names}"
+    assert "implement" in tool_names, f"Expected implement tool call, got: {tool_names}"
+
+    # Verify ordering: plan before implement
+    plan_idx = tool_names.index("plan")
+    impl_idx = tool_names.index("implement")
+    assert plan_idx < impl_idx, f"plan should come before implement: {tool_names}"
+
+    # Verify the file was actually created
+    rc, stdout, _ = await sandbox.exec("test-multi", "cat /workspace/is_palindrome.py")
+    assert rc == 0, "is_palindrome.py not created"
+    assert "palindrome" in stdout.lower()

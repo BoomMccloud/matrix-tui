@@ -6,8 +6,7 @@ import json
 from unittest.mock import AsyncMock
 
 import pytest
-from aiohttp import web
-from aiohttp.test_utils import AioHTTPTestCase, TestClient, TestServer
+from aiohttp.test_utils import TestClient, TestServer
 
 from matrix_agent.channels import GitHubChannel, Task
 
