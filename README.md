@@ -122,32 +122,19 @@ This script:
 ### Step 3 — Build the sandbox image and install the bot service
 
 ```bash
-podman build -t matrix-agent-sandbox:latest -f Containerfile .
+bash scripts/install-service.sh
 ```
 
-Install the bot as a systemd service (create
-`/etc/systemd/system/matrix-agent.service`):
+This script:
 
-```ini
-[Unit]
-Description=Matrix Agent Bot
-After=network.target synapse.service
-Requires=synapse.service
-
-[Service]
-Type=simple
-Restart=on-failure
-RestartSec=5s
-WorkingDirectory=/home/matrix-tui
-ExecStart=/root/.local/bin/uv run python -m matrix_agent
-
-[Install]
-WantedBy=multi-user.target
-```
+1. Validates `.env` has required API keys (`MATRIX_PASSWORD`, `LLM_API_KEY`, `GEMINI_API_KEY`)
+2. Checks that `podman` and `uv` are installed
+3. Builds the sandbox image (`matrix-agent-sandbox:latest`)
+4. Creates and enables the `matrix-agent` systemd service (auto-detects Synapse dependency)
+5. Starts the bot
 
 ```bash
-systemctl daemon-reload
-systemctl enable --now matrix-agent
+# Check it's running
 journalctl -u matrix-agent -f
 ```
 

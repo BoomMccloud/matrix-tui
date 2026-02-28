@@ -12,7 +12,7 @@ import os
 import shutil
 import time
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import patch
 
 import pytest
 
@@ -51,6 +51,10 @@ def settings():
         github_token=os.environ.get("GITHUB_TOKEN", ""),
         ipc_base_dir=os.path.realpath("/tmp/test-integration-ipc"),
         screenshot_script="/opt/playwright/screenshot.js",
+        llm_api_key=os.environ.get("LLM_API_KEY", ""),
+        llm_model=os.environ.get("LLM_MODEL", "openrouter/anthropic/claude-haiku-4-5"),
+        llm_api_base=os.environ.get("LLM_API_BASE", ""),
+        max_agent_turns=10,
     )
 
 
@@ -163,20 +167,39 @@ async def _dump_hook_errors(sandbox, chat_id):
 @pytest.mark.asyncio
 async def test_ipc_event_files_written(settings, sandbox, core):
     """After a gemini run with hooks, event-result.json exists in IPC dir."""
-    task = Task(task_id="integ-ipc-2", description="echo hello", source="test")
+    task = Task(
+        task_id="integ-ipc-2",
+        description="Create a file /workspace/test.txt with the text 'hello'. Do not run any other commands.",
+        source="test",
+    )
 
-    try:
-        await core.submit(task, on_result=AsyncMock())
-    except Exception:
+    result = None
+    error = None
+
+    async def on_result(r):
+        nonlocal result
+        result = r
+
+    async def on_error(e):
+        nonlocal error
+        error = e
+
+    await core.submit(task, on_result=on_result, on_error=on_error)
+
+    if error:
         await _dump_hook_errors(sandbox, "integ-ipc-2")
-        raise
+        log.error("Task error: %s", error)
 
     ipc_dir = os.path.join(settings.ipc_base_dir, "sandbox-integ-ipc-2")
     result_file = os.path.join(ipc_dir, "event-result.json")
-    assert os.path.exists(result_file), "AfterAgent hook didn't write event-result.json"
+    assert os.path.exists(result_file), (
+        f"AfterAgent hook didn't write event-result.json "
+        f"(result={result is not None}, error={error})"
+    )
 
     with open(result_file) as f:
-        data = json.load(f)
+        # strict=False tolerates control chars in Gemini's prompt_response
+        data = json.loads(f.read(), strict=False)
     # Should contain AfterAgent hook payload
     assert isinstance(data, dict)
 
@@ -192,6 +215,7 @@ async def test_orchestrator_multi_agent_events(settings, sandbox):
     from matrix_agent.tools import execute_tool
 
     agent = Agent(settings, sandbox)
+    await sandbox.create("test-multi")
 
     # Collect all tool calls and their order
     tool_log = []
