@@ -75,6 +75,9 @@ class GitHubChannel(ChannelAdapter):
         await asyncio.create_subprocess_exec(
             "gh", "issue", "comment", issue_number, "--body", body,
         )
+        await asyncio.create_subprocess_exec(
+            "gh", "issue", "close", issue_number,
+        )
 
     async def deliver_error(self, task_id: str, error: str) -> None:
         issue_number = task_id.split("-", 1)[1]
