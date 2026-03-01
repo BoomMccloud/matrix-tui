@@ -72,7 +72,7 @@ class GitHubChannel(ChannelAdapter):
     async def deliver_result(self, task_id: str, text: str, *, status: str = "completed") -> None:
         issue_number = task_id.split("-", 1)[1]
         if status == "max_turns":
-            body = f"⚠️ {text}"
+            body = f"🤖 {text}"
         else:
             body = f"✅ Completed — {text}"
 
@@ -223,19 +223,27 @@ class GitHubChannel(ChannelAdapter):
             message = f"Repository: {repo_full_name}\n\n# {issue['title']}\n\n{issue.get('body', '')}"
             await self.task_runner.enqueue(task_id, message, self)
 
-            # Backfill existing comments
+            # Backfill existing comments as bundled context
             repo_full_name = payload.get("repository", {}).get("full_name", "")
             if repo_full_name:
                 proc = await asyncio.create_subprocess_exec(
                     "gh", "api", f"repos/{repo_full_name}/issues/{issue['number']}/comments",
-                    "--jq", ".[].body",
+                    "--jq", "[.[] | .body]",
                     stdout=asyncio.subprocess.PIPE,
                 )
                 stdout, _ = await proc.communicate()
                 if proc.returncode == 0 and stdout:
-                    for comment in stdout.decode().strip().split("\n"):
-                        if comment.strip() and not comment.strip().startswith("🤖"):
-                            await self.task_runner.enqueue(task_id, comment.strip(), self)
+                    try:
+                        bodies = json.loads(stdout.decode())
+                    except (ValueError, TypeError):
+                        bodies = []
+                    comments = [
+                        b for b in bodies
+                        if b.strip() and not b.strip().startswith(("🤖", "✅", "❌"))
+                    ]
+                    if comments:
+                        context = "Previous comments on this issue:\n\n" + "\n---\n".join(comments)
+                        await self.task_runner.enqueue(task_id, context, self)
 
         elif event_type == "issue_comment" and action == "created":
             issue = payload["issue"]

@@ -15,6 +15,7 @@ def _make_settings():
         command_timeout_seconds=10,
         coding_timeout_seconds=30,
         gemini_api_key="fake",
+        gemini_model="",
         dashscope_api_key="",
         github_token="",
         ipc_base_dir="/tmp/test-ipc",
