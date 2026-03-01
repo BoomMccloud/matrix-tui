@@ -52,7 +52,7 @@ async def test_plan_implement_review_scenario():
 
     call_log = []
 
-    async def fake_code_stream(chat_id, task, on_chunk, cli="gemini", chunk_size=800):
+    async def fake_code_stream(chat_id, task, on_chunk, cli="gemini", chunk_size=800, auto_accept=False):
         call_log.append({"tool": "code_stream", "cli": cli, "task": task})
         return (0, f"output from {cli}: done", "")
 
