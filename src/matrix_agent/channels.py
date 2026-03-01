@@ -203,6 +203,11 @@ class GitHubChannel(ChannelAdapter):
             if "agent-task" not in labels:
                 return web.Response(text="not an agent-task issue")
 
+            # Ignore bot's own comments to prevent feedback loops
+            sender = payload.get("comment", {}).get("user", {}).get("login", "")
+            if sender.endswith("[bot]") or payload["comment"]["body"].startswith(("✅", "❌", "🤖")):
+                return web.Response(text="ignoring bot comment")
+
             task_id = f"gh-{issue['number']}"
             comment_body = payload["comment"]["body"]
             await self.task_runner.enqueue(task_id, comment_body, self)
