@@ -72,19 +72,36 @@ class GitHubChannel(ChannelAdapter):
     async def deliver_result(self, task_id: str, text: str) -> None:
         issue_number = task_id.split("-", 1)[1]
         body = f"✅ Completed — {text}"
-        await asyncio.create_subprocess_exec(
+        proc = await asyncio.create_subprocess_exec(
             "gh", "issue", "comment", issue_number, "--body", body,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
         )
-        await asyncio.create_subprocess_exec(
+        stdout, stderr = await proc.communicate()
+        if proc.returncode != 0:
+            log.error("gh issue comment failed for #%s: %s", issue_number, stderr.decode())
+            return
+
+        proc = await asyncio.create_subprocess_exec(
             "gh", "issue", "close", issue_number,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
         )
+        stdout, stderr = await proc.communicate()
+        if proc.returncode != 0:
+            log.error("gh issue close failed for #%s: %s", issue_number, stderr.decode())
 
     async def deliver_error(self, task_id: str, error: str) -> None:
         issue_number = task_id.split("-", 1)[1]
         body = f"❌ Failed: {error}"
-        await asyncio.create_subprocess_exec(
+        proc = await asyncio.create_subprocess_exec(
             "gh", "issue", "comment", issue_number, "--body", body,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
         )
+        stdout, stderr = await proc.communicate()
+        if proc.returncode != 0:
+            log.error("gh issue comment (error) failed for #%s: %s", issue_number, stderr.decode())
 
     async def is_valid(self, task_id: str) -> bool:
         """Check if the issue is still open with the agent-task label."""
@@ -133,11 +150,16 @@ class GitHubChannel(ChannelAdapter):
             results.append((task_id, message))
 
             # Post recovery comment
-            await asyncio.create_subprocess_exec(
+            proc = await asyncio.create_subprocess_exec(
                 "gh", "issue", "comment", str(number),
                 "--repo", repo,
                 "--body", "🤖 Bot restarted — resuming work on this issue.",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
             )
+            stdout, stderr = await proc.communicate()
+            if proc.returncode != 0:
+                log.error("gh issue comment (recovery) failed for #%s: %s", number, stderr.decode())
 
         log.info("GitHub recovery: found %d open agent-task issues", len(results))
         return results
@@ -180,10 +202,15 @@ class GitHubChannel(ChannelAdapter):
                 return web.Response(text="already processing")
 
             # Post "Working" comment
-            await asyncio.create_subprocess_exec(
+            proc = await asyncio.create_subprocess_exec(
                 "gh", "issue", "comment", str(issue["number"]),
                 "--body", "🤖 Working on this issue...",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
             )
+            stdout, stderr = await proc.communicate()
+            if proc.returncode != 0:
+                log.error("gh issue comment (working) failed for #%s: %s", issue["number"], stderr.decode())
 
             # Enqueue title+body as first message
             repo_full_name = payload.get("repository", {}).get("full_name", "")
