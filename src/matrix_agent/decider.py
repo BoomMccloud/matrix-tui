@@ -75,8 +75,23 @@ Do NOT manually run `git` or `gh` commands. Instead, call the `create_pull_reque
 The tool will automatically handle branching, committing, pushing, and opening the PR.
 Provide a clear PR title and a body that references the issue (e.g., "Closes #123").
 
-Report the PR URL (returned by the tool) as your final message.
-If you cannot complete the task, explain what's blocking you.
+Your final message will be posted as a GitHub issue comment and may be used as context
+if the issue is reopened. Structure it clearly:
+
+**On success:**
+- What you did (1-2 sentences)
+- PR link
+- Any caveats or follow-ups
+
+**On failure or partial progress:**
+- What you tried and what happened
+- Where you got stuck (with specific errors)
+- 2-3 suggested next steps, ranked by likelihood of success
+
+**If you need human input:**
+- What decision you need (be specific)
+- The options you see, with trade-offs
+- Your recommendation
 """
 
 
