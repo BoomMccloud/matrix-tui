@@ -205,6 +205,20 @@ TOOL_SCHEMAS = [
             }
         }
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "ping",
+            "description": (
+                "Returns sandbox uptime and workspace stats (file count and disk usage). "
+                "Useful for verifying the full pipeline works without burning Gemini/Qwen tokens."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {}
+            },
+        },
+    },
 ]
 
 
@@ -281,7 +295,34 @@ async def execute_tool(
         result = await _create_pull_request(sandbox, chat_id, title, body)
         return result, None
 
+    if name == "ping":
+        return await _ping(sandbox, chat_id)
+
     return f"Unknown tool: {name}", None
+
+
+async def _ping(sandbox: SandboxManager, chat_id: str) -> tuple[str, None]:
+    """Return sandbox uptime and workspace stats."""
+    container_name = sandbox._containers.get(chat_id)
+    if not container_name:
+        return "Error: No active sandbox for this chat.", None
+
+    # Get container uptime using podman inspect on the host
+    rc, out, err = await sandbox._run("inspect", "--format", "{{.State.StartedAt}}", container_name)
+    started_at = out.strip() if rc == 0 else "Unknown"
+
+    # Count files in /workspace using find
+    rc, out, err = await sandbox.exec(chat_id, "find /workspace -type f 2>/dev/null | wc -l")
+    file_count = out.strip() if rc == 0 else "Unknown"
+
+    # Get disk usage using du
+    rc, out, err = await sandbox.exec(chat_id, "du -sh /workspace 2>/dev/null")
+    disk_usage = out.strip().split()[0] if rc == 0 and out.strip() else "Unknown"
+
+    output = f"""Uptime: {started_at}
+Files in /workspace: {file_count}
+Disk usage: {disk_usage}"""
+    return output, None
 
 
 async def _create_pull_request(sandbox, chat_id, title, body):
@@ -292,7 +333,7 @@ async def _create_pull_request(sandbox, chat_id, title, body):
     rc, stdout, stderr = await sandbox.exec(chat_id, "find /workspace -maxdepth 2 -name .git -type d")
     if rc != 0 or not stdout.strip():
         return "Error: No git repository found in /workspace or its subdirectories."
-    
+
     repo_dir = stdout.strip().split("\n")[0].replace("/.git", "")
     log.info("[%s] Found git repo at %s", chat_id, repo_dir)
 
