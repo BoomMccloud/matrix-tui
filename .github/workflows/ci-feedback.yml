@@ -1,0 +1,81 @@
+name: CI Failure Feedback
+
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+
+jobs:
+  feedback:
+    if: >-
+      github.event.workflow_run.conclusion == 'failure' &&
+      github.event.workflow_run.pull_requests[0]
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+      pull-requests: read
+      actions: read
+    steps:
+      - name: Get PR details
+        id: pr
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          PR_NUMBER=${{ github.event.workflow_run.pull_requests[0].number }}
+          echo "number=$PR_NUMBER" >> "$GITHUB_OUTPUT"
+
+          # Extract linked issue from PR body (Closes #N, Fixes #N, Resolves #N)
+          BODY=$(gh api "repos/${{ github.repository }}/pulls/$PR_NUMBER" --jq '.body')
+          ISSUE=$(echo "$BODY" | grep -ioP '(?:closes|fixes|resolves)\s+#\K\d+' | head -1)
+          echo "issue=$ISSUE" >> "$GITHUB_OUTPUT"
+
+      - name: Download failed run logs
+        if: steps.pr.outputs.issue
+        id: logs
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          RUN_ID=${{ github.event.workflow_run.id }}
+          gh api "repos/${{ github.repository }}/actions/runs/$RUN_ID/logs" > logs.zip || true
+
+          FAILURE_LOG=""
+          if [ -f logs.zip ]; then
+            mkdir -p logs
+            unzip -o logs.zip -d logs 2>/dev/null || true
+            # Extract last 80 lines from test step logs
+            FAILURE_LOG=$(cat logs/**/*.txt 2>/dev/null | tail -80)
+          fi
+
+          if [ -z "$FAILURE_LOG" ]; then
+            FAILURE_LOG="Could not retrieve logs. See https://github.com/${{ github.repository }}/actions/runs/$RUN_ID"
+          fi
+
+          # Write to file to avoid shell escaping issues
+          echo "$FAILURE_LOG" > failure_log.txt
+
+      - name: Comment on issue and reopen
+        if: steps.pr.outputs.issue
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ISSUE: ${{ steps.pr.outputs.issue }}
+          PR_NUMBER: ${{ steps.pr.outputs.number }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+          REPO: ${{ github.repository }}
+        run: |
+          FAILURE_LOG=$(cat failure_log.txt)
+
+          COMMENT="🤖 CI failed on PR #${PR_NUMBER}. Please fix the failing tests.
+
+          **Run:** https://github.com/${REPO}/actions/runs/${RUN_ID}
+
+          <details>
+          <summary>Failure logs</summary>
+
+          \`\`\`
+          ${FAILURE_LOG}
+          \`\`\`
+
+          </details>"
+
+          gh issue comment "$ISSUE" --repo "$REPO" --body "$COMMENT"
+          gh issue reopen "$ISSUE" --repo "$REPO"
