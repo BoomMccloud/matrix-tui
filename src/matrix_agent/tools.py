@@ -3,6 +3,7 @@
 import asyncio
 import json
 import logging
+import re
 
 from .sandbox import SandboxManager
 
@@ -291,7 +292,6 @@ async def execute_tool(
 
 async def _create_pull_request(sandbox, chat_id, title, body):
     """Branch, commit, push, and open a PR. Returns the PR URL or error."""
-    import re
 
     # Find the git repo (either /workspace or a direct subdirectory)
     rc, stdout, stderr = await sandbox.exec(chat_id, "find /workspace -maxdepth 2 -name .git -type d")
