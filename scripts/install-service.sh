@@ -117,6 +117,7 @@ Type=simple
 Restart=on-failure
 RestartSec=5s
 WorkingDirectory=$REPO_DIR
+Environment=LOG_LEVEL=DEBUG
 ExecStart=$UV_PATH run python -m matrix_agent
 
 [Install]

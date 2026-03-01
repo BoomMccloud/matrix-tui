@@ -160,10 +160,17 @@ class GitHubChannel(ChannelAdapter):
         event_type = request.headers.get("X-GitHub-Event", "")
         action = payload.get("action", "")
 
-        if event_type == "issues" and action == "labeled":
-            label = payload.get("label", {}).get("name", "")
-            if label != "agent-task":
-                return web.Response(text="ignored label")
+        if event_type == "issues" and action in ("labeled", "reopened"):
+            # For "labeled", only react to the agent-task label
+            if action == "labeled":
+                label = payload.get("label", {}).get("name", "")
+                if label != "agent-task":
+                    return web.Response(text="ignored label")
+            else:
+                # For "reopened", verify agent-task label is present
+                issue_labels = [lb["name"] for lb in payload["issue"].get("labels", [])]
+                if "agent-task" not in issue_labels:
+                    return web.Response(text="reopened but not an agent-task issue")
 
             issue = payload["issue"]
             task_id = f"gh-{issue['number']}"
@@ -209,6 +216,14 @@ class GitHubChannel(ChannelAdapter):
                 return web.Response(text="ignoring bot comment")
 
             task_id = f"gh-{issue['number']}"
+
+            # Post "Working" comment if this is a new task (not already processing)
+            if task_id not in self.task_runner._processing:
+                await asyncio.create_subprocess_exec(
+                    "gh", "issue", "comment", str(issue["number"]),
+                    "--body", "🤖 Working on this issue...",
+                )
+
             comment_body = payload["comment"]["body"]
             await self.task_runner.enqueue(task_id, comment_body, self)
 

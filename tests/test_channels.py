@@ -199,6 +199,8 @@ async def test_webhook_idempotency_skips_duplicate(client, github_channel):
 @pytest.mark.asyncio
 async def test_webhook_issue_comment(client, github_channel):
     """issue_comment webhook enqueues the comment body (spec test 4)."""
+    # Simulate task already processing (follow-up comment, no "working" comment posted)
+    github_channel.task_runner._processing.add("gh-7")
     payload = {
         "action": "created",
         "issue": {

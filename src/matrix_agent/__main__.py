@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import os
 
 from .config import Settings
 from .sandbox import SandboxManager
@@ -11,7 +12,7 @@ from .bot import Bot
 from .channels import GitHubChannel
 
 logging.basicConfig(
-    level=logging.INFO,
+    level=getattr(logging, os.environ.get("LOG_LEVEL", "INFO").upper(), logging.INFO),
     format="%(asctime)s %(name)s %(levelname)s %(message)s",
 )
 

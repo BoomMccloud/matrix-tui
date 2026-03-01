@@ -448,6 +448,8 @@ exit $rc
             async for raw in proc.stdout:
                 line = _strip_ansi(raw.decode(errors="replace"))
                 stdout_parts.append(line)
+                if line.strip():
+                    log.debug("[%s] %s", name, line.rstrip())
                 buffer.append(line)
                 if sum(len(b) for b in buffer) >= chunk_size:
                     await flush()
