@@ -171,7 +171,9 @@ class Decider:
                 log.info("[%s] Final response on turn %d: %s", chat_id[:20], turn + 1, (msg.content or "")[:200])
                 if msg.content:
                     self.sandbox.save_state()
-                    yield msg.content, None, "completed"
+                    summary = ", ".join(f"{name} ({count})" for name, count in tool_counts.items())
+                    footer = f"\n\n---\n*Turns: {turn + 1}/{self.max_turns} | Tools: {summary}*"
+                    yield msg.content + footer, None, "completed"
                 return
 
             # Execute each tool call
