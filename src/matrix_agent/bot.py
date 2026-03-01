@@ -1,4 +1,4 @@
-"""Matrix bot — bridges room messages to the agent, manages room/container lifecycle."""
+"""Matrix bot — channel adapter bridging room messages to the decider."""
 
 import asyncio
 import io
@@ -16,22 +16,59 @@ from nio import (
     UploadResponse,
 )
 
-from .agent import Agent
+from .decider import Decider, SYSTEM_PROMPT
 from .config import Settings
 from .sandbox import SandboxManager
+from .channels import ChannelAdapter
+from .core import TaskRunner
 
 log = logging.getLogger(__name__)
 
 
+class MatrixChannel(ChannelAdapter):
+    system_prompt = SYSTEM_PROMPT
+
+    def __init__(self, bot: "Bot", room_id: str):
+        self.bot = bot
+        self.room_id = room_id
+
+    async def start(self) -> None:
+        pass  # Matrix client lifecycle is managed by Bot.run()
+
+    async def stop(self) -> None:
+        pass
+
+    async def send_update(self, task_id: str, text: str) -> None:
+        """Send intermediate output as a Matrix message."""
+        content = {"msgtype": "m.text", "body": f"```\n{text}\n```"}
+        await self.bot.client.room_send(
+            self.room_id, "m.room.message", content
+        )
+
+    async def deliver_result(self, task_id: str, text: str) -> None:
+        content = {"msgtype": "m.text", "body": text}
+        await self.bot.client.room_send(
+            self.room_id, "m.room.message", content
+        )
+
+    async def deliver_error(self, task_id: str, error: str) -> None:
+        content = {"msgtype": "m.text", "body": f"Error: {error}"}
+        await self.bot.client.room_send(
+            self.room_id, "m.room.message", content
+        )
+
+    async def is_valid(self, task_id: str) -> bool:
+        return task_id in self.bot.client.rooms
+
+
 class Bot:
-    def __init__(self, settings: Settings, sandbox: SandboxManager, agent: Agent):
+    def __init__(self, settings: Settings, sandbox: SandboxManager, decider: Decider, task_runner: TaskRunner):
         self.settings = settings
         self.sandbox = sandbox
-        self.agent = agent
+        self.decider = decider
+        self.task_runner = task_runner
         self.client = AsyncClient(settings.matrix_homeserver, settings.matrix_user)
         self._synced = False
-        self._queues: dict[str, asyncio.Queue] = {}
-        self._workers: dict[str, asyncio.Task] = {}
 
     async def _login(self):
         resp = await self.client.login(self.settings.matrix_password)
@@ -61,86 +98,8 @@ class Bot:
             return
         log.info("Message from %s in %s: %s", event.sender, room.room_id, event.body[:80])
 
-        room_id = room.room_id
-        text = event.body
-
-        if room_id not in self._queues:
-            self._queues[room_id] = asyncio.Queue()
-            self._workers[room_id] = asyncio.create_task(
-                self._room_worker(room_id), name=f"worker-{room_id}"
-            )
-
-        queue = self._queues[room_id]
-        position = queue.qsize()
-        await queue.put(text)
-
-        if position > 0:
-            await self.client.room_send(
-                room_id, "m.room.message",
-                {"msgtype": "m.text", "body": f"⏳ Queued (position {position + 1}) — I'll get to this after the current task."},
-            )
-
-    async def _room_worker(self, room_id: str) -> None:
-        """Process messages for a single room, one at a time."""
-        queue = self._queues[room_id]
-        while True:
-            text = await queue.get()
-            try:
-                await self._process_message(room_id, text)
-            except Exception:
-                log.exception("Unhandled error in room worker %s", room_id)
-            finally:
-                queue.task_done()
-
-    async def _process_message(self, room_id: str, text: str) -> None:
-        """Create sandbox if needed, send ack, run agent, stream replies."""
-        if room_id not in self.sandbox._containers:
-            log.info("First message in %s — creating sandbox", room_id)
-            try:
-                await self.sandbox.create(room_id)
-            except Exception as e:
-                log.exception("Failed to create sandbox for %s", room_id)
-                await self.client.room_send(
-                    room_id, "m.room.message",
-                    {"msgtype": "m.text", "body": f"Failed to create sandbox: {e}"},
-                )
-                return
-
-        await self.client.room_send(
-            room_id, "m.room.message",
-            {"msgtype": "m.text", "body": "⏳ Working on it..."},
-        )
-
-        container_name = self.sandbox._containers.get(room_id)
-        typing_task = asyncio.create_task(self._keep_typing(room_id))
-        ipc_task = asyncio.create_task(self._watch_ipc(room_id, container_name)) if container_name else None
-
-        async def send_update(chunk: str) -> None:
-            await self.client.room_send(
-                room_id, "m.room.message",
-                {"msgtype": "m.text", "body": f"```\n{chunk.strip()}\n```"},
-            )
-
-        try:
-            async for reply_text, image in self.agent.handle_message(room_id, text, send_update=send_update):
-                if image:
-                    await self._send_image(room_id, image)
-                if reply_text:
-                    await self.client.room_send(
-                        room_id, "m.room.message",
-                        {"msgtype": "m.text", "body": reply_text},
-                    )
-        except Exception as e:
-            log.exception("Agent error in %s", room_id)
-            await self.client.room_send(
-                room_id, "m.room.message",
-                {"msgtype": "m.text", "body": f"Error: {e}"},
-            )
-        finally:
-            if ipc_task:
-                ipc_task.cancel()
-            typing_task.cancel()
-            await self.client.room_typing(room_id, typing_state=False)
+        channel = MatrixChannel(self, room.room_id)
+        await self.task_runner.enqueue(room.room_id, event.body, channel)
 
     async def _on_member(self, room, event):
         """Cleanup when bot is kicked or last user leaves."""
@@ -151,22 +110,15 @@ class Bot:
 
         if event.state_key == self.client.user_id and event.membership in ("leave", "ban"):
             log.info("Bot removed from %s — destroying sandbox", room.room_id)
-            await self.sandbox.destroy(room.room_id)
-            self._cancel_worker(room.room_id)
+            await self.task_runner._cleanup(room.room_id)
             return
 
         if event.membership in ("leave", "ban") and event.state_key != self.client.user_id:
             non_bot = [u for u in room.users if u != self.client.user_id]
             if not non_bot:
                 log.info("All users left %s — destroying sandbox and leaving", room.room_id)
-                await self.sandbox.destroy(room.room_id)
-                self._cancel_worker(room.room_id)
+                await self.task_runner._cleanup(room.room_id)
                 await self.client.room_leave(room.room_id)
-
-    def _cancel_worker(self, room_id: str) -> None:
-        if task := self._workers.pop(room_id, None):
-            task.cancel()
-        self._queues.pop(room_id, None)
 
     async def _watch_ipc(self, room_id: str, container_name: str) -> None:
         """Poll for IPC files (notification, progress, result) and send Matrix messages."""
@@ -265,10 +217,7 @@ class Bot:
             log.info("catch-up join (no greeting) for %s", room_id)
             await self.client.join(room_id)
 
-        histories = await self.sandbox.load_state()
-        self.agent.load_histories(histories)
-        log.info("Loaded state: %d rooms", len(histories))
-
+        # State + histories already loaded in __main__.py
         self._synced = True
         log.info("Initial sync complete, now listening")
 
@@ -277,25 +226,10 @@ class Bot:
 
         self.client.add_response_callback(on_sync, SyncResponse)
 
-        reconcile_task = asyncio.create_task(self._reconcile_loop())
+        reconcile_task = asyncio.create_task(self.task_runner.reconcile_loop())
         try:
             await self.client.sync_forever(timeout=30000)
         finally:
             reconcile_task.cancel()
-            log.info("Shutting down — destroying all sandboxes")
-            await self.sandbox.destroy_all()
+            log.info("Shutting down")
             await self.client.close()
-
-    async def _reconcile_loop(self):
-        """Periodically destroy containers for rooms the bot is no longer in."""
-        while True:
-            await asyncio.sleep(60)
-            try:
-                joined = set(self.client.rooms.keys())
-                for chat_id in list(self.sandbox._containers):
-                    if chat_id not in joined:
-                        log.info("Reconcile: destroying orphaned container for %s", chat_id)
-                        await self.sandbox.destroy(chat_id)
-                        self._cancel_worker(chat_id)
-            except Exception:
-                log.exception("Reconcile loop error")

@@ -1,4 +1,4 @@
-"""Tool definitions and dispatch for the agent."""
+"""Tool definitions and dispatch for the decider."""
 
 import asyncio
 import json
@@ -158,7 +158,12 @@ TOOL_SCHEMAS = [
             ),
             "parameters": {
                 "type": "object",
-                "properties": {},
+                "properties": {
+                    "branch": {
+                        "type": "string",
+                        "description": "Git branch to checkout before pulling. Defaults to current branch (usually main).",
+                    },
+                },
             },
         },
     },
@@ -178,6 +183,27 @@ TOOL_SCHEMAS = [
                 "required": ["url"],
             },
         },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "create_pull_request",
+            "description": "Create a git branch, commit all changes, push, and open a GitHub pull request. Returns the PR URL.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "title": {
+                        "type": "string",
+                        "description": "PR title"
+                    },
+                    "body": {
+                        "type": "string",
+                        "description": "PR body (reference the issue, e.g. 'Closes #42')"
+                    }
+                },
+                "required": ["title", "body"]
+            }
+        }
     },
 ]
 
@@ -240,7 +266,8 @@ async def execute_tool(
         return output, None
 
     if name == "self_update":
-        return await _self_update(), None
+        branch = args.get("branch") if args else None
+        return await _self_update(branch=branch), None
 
     if name == "take_screenshot":
         img = await sandbox.screenshot(chat_id, args["url"])
@@ -248,10 +275,54 @@ async def execute_tool(
             return "Screenshot taken successfully.", img
         return "Screenshot failed.", None
 
+    if name == "create_pull_request":
+        title = args["title"]
+        body = args["body"]
+        result = await _create_pull_request(sandbox, chat_id, title, body)
+        return result, None
+
     return f"Unknown tool: {name}", None
 
 
-async def _self_update() -> str:
+async def _create_pull_request(sandbox, chat_id, title, body):
+    """Branch, commit, push, and open a PR. Returns the PR URL or error."""
+    import re
+
+    # Find the git repo (either /workspace or a direct subdirectory)
+    rc, stdout, stderr = await sandbox.exec(chat_id, "find /workspace -maxdepth 2 -name .git -type d")
+    if rc != 0 or not stdout.strip():
+        return "Error: No git repository found in /workspace or its subdirectories."
+    
+    repo_dir = stdout.strip().split("\n")[0].replace("/.git", "")
+    log.info("[%s] Found git repo at %s", chat_id, repo_dir)
+
+    # Derive a branch name from the PR title
+    slug = re.sub(r"[^a-z0-9]+", "-", title.lower()).strip("-")[:50]
+    branch = f"agent/{slug}"
+
+    commands = [
+        f"git checkout -b {branch}",
+        "git add -A",
+        f"git commit -m {_shell_quote(title)}",
+        f"git push -u origin {branch}",
+        f"gh pr create --title {_shell_quote(title)} --body {_shell_quote(body)}",
+    ]
+
+    for cmd in commands:
+        rc, stdout, stderr = await sandbox.exec(chat_id, f"cd {repo_dir} && {cmd}")
+        if rc != 0:
+            return f"Failed at `{cmd}` in {repo_dir}:\n{stderr or stdout}"
+
+    # The last command's stdout contains the PR URL
+    return stdout.strip()
+
+
+def _shell_quote(s):
+    """Single-quote a string for shell safety."""
+    return "'" + s.replace("'", "'\\''") + "'"
+
+
+async def _self_update(branch: str | None = None) -> str:
     """Run git pull + image rebuild, then restart the service."""
     repo = "/home/matrix-tui"
 
@@ -264,6 +335,15 @@ async def _self_update() -> str:
         )
         stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=300)
         return proc.returncode or 0, stdout.decode().strip()
+
+    if branch:
+        log.info("self_update: fetching and checking out branch %s", branch)
+        rc, out = await run(["git", "fetch", "origin"])
+        if rc != 0:
+            return f"git fetch failed (exit {rc}):\n{out}"
+        rc, out = await run(["git", "checkout", branch])
+        if rc != 0:
+            return f"git checkout {branch} failed (exit {rc}):\n{out}"
 
     log.info("self_update: git pull")
     rc, pull_out = await run(["git", "pull"])

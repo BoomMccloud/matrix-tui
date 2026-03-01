@@ -4,26 +4,18 @@ import hashlib
 import hmac
 import json
 import logging
+import asyncio
 from abc import ABC, abstractmethod
-from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
-from typing import Any
 
 from aiohttp import web
+from .decider import GITHUB_SYSTEM_PROMPT
 
 log = logging.getLogger(__name__)
 
 
-@dataclass
-class Task:
-    task_id: str
-    description: str
-    repo: str | None = None
-    issue_number: int | None = None
-    source: str = ""
-
-
 class ChannelAdapter(ABC):
+    system_prompt: str = ""
+
     @abstractmethod
     async def start(self) -> None: ...
 
@@ -31,15 +23,23 @@ class ChannelAdapter(ABC):
     async def stop(self) -> None: ...
 
     @abstractmethod
-    async def deliver_result(self, task_id: str, result: str) -> None: ...
+    async def send_update(self, task_id: str, text: str) -> None: ...
+
+    @abstractmethod
+    async def deliver_result(self, task_id: str, text: str) -> None: ...
 
     @abstractmethod
     async def deliver_error(self, task_id: str, error: str) -> None: ...
 
+    @abstractmethod
+    async def is_valid(self, task_id: str) -> bool: ...
+
 
 class GitHubChannel(ChannelAdapter):
-    def __init__(self, submit_task: Callable[[Task], Awaitable[Any]], settings: Any):
-        self.submit_task = submit_task
+    system_prompt = GITHUB_SYSTEM_PROMPT
+
+    def __init__(self, task_runner, settings):
+        self.task_runner = task_runner
         self.settings = settings
         self._runner: web.AppRunner | None = None
 
@@ -61,11 +61,40 @@ class GitHubChannel(ChannelAdapter):
             await self._runner.cleanup()
             self._runner = None
 
-    async def deliver_result(self, task_id: str, result: str) -> None:
-        pass  # TODO: post comment on GitHub issue
+    async def send_update(self, task_id: str, text: str) -> None:
+        # No-op for GitHub — avoid spamming issues with intermediate output
+        pass
+
+    async def deliver_result(self, task_id: str, text: str) -> None:
+        issue_number = task_id.split("-", 1)[1]
+        body = f"✅ Completed — {text}"
+        await asyncio.create_subprocess_exec(
+            "gh", "issue", "comment", issue_number, "--body", body,
+        )
 
     async def deliver_error(self, task_id: str, error: str) -> None:
-        pass  # TODO: post error comment on GitHub issue
+        issue_number = task_id.split("-", 1)[1]
+        body = f"❌ Failed: {error}"
+        await asyncio.create_subprocess_exec(
+            "gh", "issue", "comment", issue_number, "--body", body,
+        )
+
+    async def is_valid(self, task_id: str) -> bool:
+        """Check if the issue is still open with the agent-task label."""
+        issue_number = task_id.split("-", 1)[1]
+        proc = await asyncio.create_subprocess_exec(
+            "gh", "issue", "view", issue_number, "--json", "state,labels",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, _ = await proc.communicate()
+        if proc.returncode != 0:
+            return False
+        data = json.loads(stdout)
+        if data.get("state") != "OPEN":
+            return False
+        labels = [lb["name"] for lb in data.get("labels", [])]
+        return "agent-task" in labels
 
     async def _handle_webhook(self, request: web.Request) -> web.Response:
         body = await request.read()
@@ -82,23 +111,54 @@ class GitHubChannel(ChannelAdapter):
                 return web.Response(status=401, text="Invalid signature")
 
         payload = json.loads(body)
+        event_type = request.headers.get("X-GitHub-Event", "")
+        action = payload.get("action", "")
 
-        if payload.get("action") != "labeled":
-            return web.Response(status=200, text="Ignored")
+        if event_type == "issues" and action == "labeled":
+            label = payload.get("label", {}).get("name", "")
+            if label != "agent-task":
+                return web.Response(text="ignored label")
 
-        label_name = payload.get("label", {}).get("name", "")
-        if label_name != "agent-task":
-            return web.Response(status=200, text="Ignored")
+            issue = payload["issue"]
+            task_id = f"gh-{issue['number']}"
 
-        issue = payload["issue"]
-        repo = payload["repository"]["full_name"]
-        task = Task(
-            task_id=f"gh-{issue['number']}",
-            description=f"{issue['title']}\n\n{issue.get('body', '')}",
-            repo=repo,
-            issue_number=issue["number"],
-            source="github",
-        )
+            # Idempotency: skip if already processing
+            if task_id in self.task_runner._processing:
+                return web.Response(text="already processing")
 
-        await self.submit_task(task)
+            # Post "Working" comment
+            await asyncio.create_subprocess_exec(
+                "gh", "issue", "comment", str(issue["number"]),
+                "--body", "🤖 Working on this issue...",
+            )
+
+            # Enqueue title+body as first message
+            repo_full_name = payload.get("repository", {}).get("full_name", "")
+            message = f"Repository: {repo_full_name}\n\n# {issue['title']}\n\n{issue.get('body', '')}"
+            await self.task_runner.enqueue(task_id, message, self)
+
+            # Backfill existing comments
+            repo_full_name = payload.get("repository", {}).get("full_name", "")
+            if repo_full_name:
+                proc = await asyncio.create_subprocess_exec(
+                    "gh", "api", f"repos/{repo_full_name}/issues/{issue['number']}/comments",
+                    "--jq", ".[].body",
+                    stdout=asyncio.subprocess.PIPE,
+                )
+                stdout, _ = await proc.communicate()
+                if proc.returncode == 0 and stdout:
+                    for comment in stdout.decode().strip().split("\n"):
+                        if comment.strip():
+                            await self.task_runner.enqueue(task_id, comment.strip(), self)
+
+        elif event_type == "issue_comment" and action == "created":
+            issue = payload["issue"]
+            labels = [lb["name"] for lb in issue.get("labels", [])]
+            if "agent-task" not in labels:
+                return web.Response(text="not an agent-task issue")
+
+            task_id = f"gh-{issue['number']}"
+            comment_body = payload["comment"]["body"]
+            await self.task_runner.enqueue(task_id, comment_body, self)
+
         return web.Response(status=202, text="Accepted")

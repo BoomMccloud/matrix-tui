@@ -20,28 +20,29 @@ bash scripts/deploy.sh                  # full deploy: pull + rebuild + restart
 ## Architecture
 
 ```
-Matrix Client → Synapse Homeserver → Bot (bot.py)
-                                       ├─ per-room asyncio.Queue + worker Task
-                                       ├─ Agent (agent.py) — LiteLLM tool-calling loop
-                                       └─ SandboxManager (sandbox.py) — Podman containers
-                                            └─ Tools (tools.py): run_command, read_file,
-                                               write_file, code (Gemini CLI), take_screenshot,
-                                               run_tests, self_update
+Matrix Client → Bot (bot.py) → MatrixChannel ─┐
+                                               ├─→ TaskRunner (core.py) ─→ Decider (decider.py)
+GitHub Webhook → GitHubChannel (channels.py) ──┘        │                       │
+                                                   SandboxManager          LiteLLM + Tools
+                                                   (sandbox.py)           (tools.py)
 ```
 
-- **bot.py** — Matrix event handling, room lifecycle, per-room message queuing. One container per room, created lazily. Streams Gemini output back to chat.
-- **agent.py** — LLM orchestrator loop. Maintains per-room conversation history. Iterates up to `max_agent_turns` calling tools via function calling.
-- **sandbox.py** — Podman container creation/destruction, state persistence. Named containers (`sandbox-<room-slug>`) enable reconnection after restart. Atomic state.json writes via tmp+rename.
-- **tools.py** — Tool schemas and execution dispatch. The `code` tool delegates to Gemini CLI with streaming output.
-- **config.py** — Pydantic settings derived from `.env`. `VPS_IP` auto-derives Matrix URLs.
+- **core.py** — `TaskRunner`: channel-agnostic queue/worker lifecycle. Owns `_queues`, `_workers`, `_processing` set. `enqueue(task_id, message, channel)` creates per-task workers. `reconcile_loop()` cleans up invalid tasks every 60s.
+- **channels.py** — `ChannelAdapter` ABC (`send_update`, `deliver_result`, `deliver_error`, `is_valid`). `GitHubChannel` handles webhooks (HMAC-verified), posts status comments via `gh` CLI.
+- **bot.py** — Matrix event handling, room lifecycle. `MatrixChannel` adapter streams output to Matrix rooms. Delegates all task work to `TaskRunner.enqueue()`.
+- **decider.py** — LLM orchestrator loop (Haiku via LiteLLM). Per-task conversation history. Routes tools: `plan`/`review` → Gemini, `implement` → Qwen. Accepts per-channel `system_prompt`.
+- **sandbox.py** — Podman container creation/destruction, state persistence. Named containers (`sandbox-<slug>`) enable reconnection after restart. Atomic state.json writes via tmp+rename.
+- **tools.py** — Tool schemas and execution dispatch. Tools: `plan`, `implement`, `review`, `run_command`, `read_file`, `write_file`, `run_tests`, `take_screenshot`, `self_update`, `create_pull_request`.
+- **config.py** — Pydantic settings from `.env`. Includes `github_webhook_port`, `github_webhook_secret`, `github_token`.
 
 ## Key Conventions (from AGENTS.md)
 
 - **Subprocess safety**: Always `asyncio.create_subprocess_exec()`, never `shell=True`
 - **Container ops**: All through SandboxManager only
 - **State persistence**: Atomic writes (`state.json.tmp` → `os.replace()`)
-- **Per-room isolation**: Each room has one Queue + one worker Task; rooms are independent
-- **Startup**: login → sync → load_state (reconnect containers) → load_histories → sync_forever
+- **Per-task isolation**: Each task (Matrix room or GitHub issue) has one Queue + one worker Task; tasks are independent
+- **Startup**: load_state → load_histories → destroy_orphans → login → sync → sync_forever
+- **Channel adapters**: New channels (Slack, Discord, CLI) require only a new `ChannelAdapter` subclass
 - **Gemini CLI**: Must run from `/workspace` for GEMINI.md auto-loading
 
 ## Gotchas

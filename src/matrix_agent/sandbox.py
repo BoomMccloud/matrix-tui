@@ -36,7 +36,7 @@ class SandboxManager:
         self.image = settings.sandbox_image
         self.timeout = settings.command_timeout_seconds
         self._containers: dict[str, str] = {}  # chat_id -> container_name
-        # Reference to agent histories — set by Agent after construction
+        # Reference to decider histories — set by Decider after construction
         self._histories: dict[str, list[dict]] | None = None
 
     async def _run(
@@ -314,6 +314,13 @@ exit $rc
             "/workspace/.gemini/hooks/notification.sh",
             "/workspace/.qwen-wrapper.sh",
         )
+
+        # Git identity for commits and PRs
+        await self._run("exec", container_name, "git", "config", "--global", "user.email", "bot@matrix-agent")
+        await self._run("exec", container_name, "git", "config", "--global", "user.name", "Matrix Agent")
+        # gh CLI auth (uses GITHUB_TOKEN env var already injected)
+        if self.settings.github_token:
+            await self._run("exec", container_name, "gh", "auth", "setup-git")
 
     async def exec(self, chat_id: str, command: str) -> tuple[int, str, str]:
         name = self._containers.get(chat_id)

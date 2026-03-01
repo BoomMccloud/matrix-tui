@@ -1,4 +1,4 @@
-"""LLM agent with tool-calling loop."""
+"""LLM decider — routing loop that decides which tool to call next."""
 
 import logging
 import time
@@ -46,11 +46,41 @@ IMPORTANT — two distinct environments:
 - sandbox container (/workspace): run_command, read_file, write_file, plan, implement, review, take_screenshot all operate HERE
 - VPS host: use self_update ONLY for updating the bot itself (runs deploy.sh: git pull + rebuild sandbox image + service restart)
 Never use run_command to try to update the bot or restart the service — that runs inside the container, not the host.
+
+When modifying the bot's own code:
+1. run_command: git clone https://github.com/BoomMccloud/matrix-tui /workspace/matrix-tui
+2. plan/implement/review: work on /workspace/matrix-tui
+3. run_command: cd /workspace/matrix-tui && git checkout -b <branch> && git add -A && git commit -m "..."
+4. run_command: cd /workspace/matrix-tui && git push origin <branch>
+5. run_command: cd /workspace/matrix-tui && gh pr create --title "..." --body "..."
+6. Tell the user the PR URL and wait for them to review/merge
+7. After merge: self_update() to pull and restart
+To test a branch before merging: self_update(branch="<branch>")
+
 Explain what you're doing as you work.\
 """
 
+GITHUB_SYSTEM_PROMPT = """You are an autonomous coding agent working on a GitHub issue.
+Your goal is to understand the issue, implement the fix or feature, and create a pull request.
 
-class Agent:
+Workflow:
+1. plan() — understand the codebase and design the approach
+2. implement() — write the code
+3. run_tests() — verify lint and tests pass
+4. review() — check for bugs and edge cases
+5. If review finds issues, implement() again
+
+After completing and verifying code changes:
+Do NOT manually run `git` or `gh` commands. Instead, call the `create_pull_request(title, body)` tool.
+The tool will automatically handle branching, committing, pushing, and opening the PR.
+Provide a clear PR title and a body that references the issue (e.g., "Closes #123").
+
+Report the PR URL (returned by the tool) as your final message.
+If you cannot complete the task, explain what's blocking you.
+"""
+
+
+class Decider:
     def __init__(self, settings: Settings, sandbox: SandboxManager):
         self.settings = settings
         self.sandbox = sandbox
@@ -63,14 +93,15 @@ class Agent:
         """Populate in-memory histories from persisted state."""
         self._histories.update(histories)
 
-    def _get_history(self, chat_id: str) -> list[dict]:
+    def _get_history(self, chat_id: str, system_prompt: str | None = None) -> list[dict]:
         if chat_id not in self._histories:
-            self._histories[chat_id] = [{"role": "system", "content": SYSTEM_PROMPT}]
+            prompt = system_prompt or SYSTEM_PROMPT
+            self._histories[chat_id] = [{"role": "system", "content": prompt}]
         return self._histories[chat_id]
 
-    async def handle_message(self, chat_id: str, user_text: str, send_update=None):
+    async def handle_message(self, chat_id: str, user_text: str, send_update=None, system_prompt: str | None = None):
         """Process a user message. Yields (text, image_bytes|None) tuples."""
-        messages = self._get_history(chat_id)
+        messages = self._get_history(chat_id, system_prompt=system_prompt)
         messages.append({"role": "user", "content": user_text})
         log.info("[%s] User message: %s", chat_id[:20], user_text[:200])
 

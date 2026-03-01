@@ -1,182 +1,185 @@
-"""Tests for AgentCore — channel-agnostic autonomous task execution."""
+"""Tests for TaskRunner — channel-agnostic autonomous task execution."""
 
-from types import SimpleNamespace
-from unittest.mock import AsyncMock
+import asyncio
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from matrix_agent.channels import Task
-from matrix_agent.core import AgentCore
+from matrix_agent.core import TaskRunner
+from matrix_agent.channels import ChannelAdapter
 
 
-def _make_settings(**overrides):
-    defaults = dict(
-        gemini_api_key="fake-key",
-        github_token="ghp_fake",
-        ipc_base_dir="/tmp/test-ipc",
-        coding_timeout_seconds=60,
-    )
-    defaults.update(overrides)
-    return SimpleNamespace(**defaults)
+class MockChannel(ChannelAdapter):
+    system_prompt = "Test prompt"
+
+    def __init__(self):
+        self.results = []
+        self.errors = []
+        self.updates = []
+
+    async def start(self) -> None: pass
+    async def stop(self) -> None: pass
+
+    async def send_update(self, task_id: str, text: str) -> None:
+        self.updates.append((task_id, text))
+
+    async def deliver_result(self, task_id: str, text: str) -> None:
+        self.results.append((task_id, text))
+
+    async def deliver_error(self, task_id: str, error: str) -> None:
+        self.errors.append((task_id, error))
+
+    async def is_valid(self, task_id: str) -> bool:
+        return True
 
 
 def _make_sandbox():
     sandbox = AsyncMock()
     sandbox._containers = {}
-    sandbox.settings = _make_settings()
-
+    
     async def fake_create(chat_id):
         sandbox._containers[chat_id] = f"sandbox-{chat_id}"
         return f"sandbox-{chat_id}"
 
     sandbox.create = AsyncMock(side_effect=fake_create)
-    sandbox.exec = AsyncMock(return_value=(0, "", ""))
-    sandbox.code_stream = AsyncMock(return_value=(0, "PR created: #1", ""))
+    sandbox.destroy = AsyncMock()
     return sandbox
 
 
+def _make_decider(mock_responses: list[tuple[str, bytes | None]]):
+    decider = MagicMock()
+
+    async def mock_handle_message(chat_id, user_text, send_update=None, system_prompt=None):
+        for text, image in mock_responses:
+            if isinstance(text, Exception):
+                raise text
+            yield text, image
+
+    decider.handle_message = mock_handle_message
+    return decider
+
+
 # ------------------------------------------------------------------ #
-# Task submission
+# TaskRunner tests
 # ------------------------------------------------------------------ #
 
 
 @pytest.mark.asyncio
-async def test_submit_creates_container():
-    """submit() creates a container for the task."""
+async def test_enqueue_creates_queue_and_worker():
+    """enqueue() creates a queue, tracking state, and starts a worker."""
     sandbox = _make_sandbox()
-    core = AgentCore(sandbox, _make_settings())
+    decider = _make_decider([])
+    runner = TaskRunner(decider, sandbox)
+    channel = MockChannel()
 
-    task = Task(task_id="gh-1", description="fix bug", repo="owner/repo", issue_number=1, source="github")
-    on_result = AsyncMock()
-    on_error = AsyncMock()
+    await runner.enqueue("task-1", "hello", channel)
 
-    await core.submit(task, on_result=on_result, on_error=on_error)
+    assert "task-1" in runner._queues
+    assert "task-1" in runner._channels
+    assert "task-1" in runner._processing
+    assert "task-1" in runner._workers
 
-    sandbox.create.assert_called_once_with("gh-1")
+    # Clean up worker
+    await runner._cleanup("task-1")
 
 
 @pytest.mark.asyncio
-async def test_submit_clones_repo():
-    """submit() clones the repo into the container."""
+async def test_worker_processes_messages_sequentially():
+    """Worker processes messages via _process() in order."""
     sandbox = _make_sandbox()
-    core = AgentCore(sandbox, _make_settings())
+    # Decider yields a success message
+    decider = _make_decider([("Processed", None)])
+    runner = TaskRunner(decider, sandbox)
+    channel = MockChannel()
 
-    task = Task(task_id="gh-2", description="add feature", repo="owner/repo", issue_number=2, source="github")
-    on_result = AsyncMock()
+    # Enqueue two messages
+    await runner.enqueue("task-2", "msg 1", channel)
+    await runner.enqueue("task-2", "msg 2", channel)
 
-    await core.submit(task, on_result=on_result)
+    # Yield to let the worker run
+    await asyncio.sleep(0.01)
 
-    # Find the exec call that does git clone
-    clone_calls = [
-        c for c in sandbox.exec.call_args_list
-        if "git clone" in str(c)
-    ]
-    assert len(clone_calls) >= 1, "Expected a git clone exec call"
+    # Check that decider was run
+    assert len(channel.results) == 2
+    assert channel.results[0] == ("task-2", "Processed")
+    assert channel.results[1] == ("task-2", "Processed")
+
+    await runner._cleanup("task-2")
 
 
 @pytest.mark.asyncio
-async def test_submit_runs_gemini_autonomous():
-    """submit() runs gemini with auto_accept=True."""
+async def test_process_creates_container():
+    """_process() creates a sandbox container if it doesn't exist."""
     sandbox = _make_sandbox()
-    core = AgentCore(sandbox, _make_settings())
+    decider = _make_decider([("Done", None)])
+    runner = TaskRunner(decider, sandbox)
+    channel = MockChannel()
 
-    task = Task(task_id="gh-3", description="fix bug", repo="owner/repo", issue_number=3, source="github")
-    on_result = AsyncMock()
+    await runner.enqueue("task-3", "hello", channel)
+    await asyncio.sleep(0.01)
 
-    await core.submit(task, on_result=on_result)
+    sandbox.create.assert_called_once_with("task-3")
+    assert "task-3" in sandbox._containers
 
-    sandbox.code_stream.assert_called_once()
-    call_kwargs = sandbox.code_stream.call_args
-    # Should pass auto_accept=True
-    assert call_kwargs.kwargs.get("auto_accept") is True or (
-        len(call_kwargs.args) > 3 and call_kwargs.args[3] is True
-    ), "Expected auto_accept=True in code_stream call"
+    await runner._cleanup("task-3")
 
 
 @pytest.mark.asyncio
-async def test_submit_fires_on_result_on_success():
-    """on_result callback fires when gemini completes successfully."""
+async def test_process_delivers_error_on_exception():
+    """_process() catches exceptions and calls deliver_error on the channel."""
     sandbox = _make_sandbox()
-    sandbox.code_stream = AsyncMock(return_value=(0, "Created PR #42", ""))
-    core = AgentCore(sandbox, _make_settings())
+    # Decider raises an exception
+    decider = _make_decider([(Exception("decider failed"), None)])
+    runner = TaskRunner(decider, sandbox)
+    channel = MockChannel()
 
-    task = Task(task_id="gh-4", description="fix it", repo="o/r", issue_number=4, source="github")
-    on_result = AsyncMock()
-    on_error = AsyncMock()
+    await runner.enqueue("task-4", "hello", channel)
+    await asyncio.sleep(0.01)
 
-    await core.submit(task, on_result=on_result, on_error=on_error)
+    assert len(channel.errors) == 1
+    assert channel.errors[0] == ("task-4", "decider failed")
+    assert len(channel.results) == 0
 
-    on_result.assert_called_once()
-    on_error.assert_not_called()
-    # Result should contain the stdout
-    result_arg = on_result.call_args[0][0] if on_result.call_args[0] else on_result.call_args[1].get("result", "")
-    assert "PR" in str(result_arg) or len(str(result_arg)) > 0
+    await runner._cleanup("task-4")
 
 
 @pytest.mark.asyncio
-async def test_submit_fires_on_error_on_failure():
-    """on_error callback fires when gemini exits non-zero."""
+async def test_reconcile_cleans_invalid_tasks():
+    """reconcile() cleans up tasks when is_valid returns False."""
     sandbox = _make_sandbox()
-    sandbox.code_stream = AsyncMock(return_value=(1, "", "gemini crashed"))
-    core = AgentCore(sandbox, _make_settings())
+    decider = _make_decider([])
+    runner = TaskRunner(decider, sandbox)
+    channel = MockChannel()
 
-    task = Task(task_id="gh-5", description="fix it", repo="o/r", issue_number=5, source="github")
-    on_result = AsyncMock()
-    on_error = AsyncMock()
+    await runner.enqueue("task-5", "hello", channel)
+    
+    # Force container presence to check destruction
+    sandbox._containers["task-5"] = "sandbox-task-5"
 
-    await core.submit(task, on_result=on_result, on_error=on_error)
+    # Make the channel report task is no longer valid
+    channel.is_valid = AsyncMock(return_value=False)
 
-    on_error.assert_called_once()
-    on_result.assert_not_called()
+    await runner.reconcile()
+
+    assert "task-5" not in runner._queues
+    assert "task-5" not in runner._channels
+    assert "task-5" not in runner._processing
+    assert "task-5" not in runner._workers
+    sandbox.destroy.assert_called_once_with("task-5")
 
 
 @pytest.mark.asyncio
-async def test_submit_fires_on_error_on_exception():
-    """on_error callback fires when an exception occurs during execution."""
+async def test_destroy_orphans():
+    """destroy_orphans() cleans up containers not in _processing."""
     sandbox = _make_sandbox()
-    sandbox.create = AsyncMock(side_effect=RuntimeError("podman failed"))
-    core = AgentCore(sandbox, _make_settings())
+    sandbox._containers = {
+        "active-1": "sandbox-active-1",
+        "orphan-1": "sandbox-orphan-1",
+    }
+    decider = _make_decider([])
+    runner = TaskRunner(decider, sandbox)
+    runner._processing.add("active-1")
 
-    task = Task(task_id="gh-6", description="fix it", repo="o/r", issue_number=6, source="github")
-    on_result = AsyncMock()
-    on_error = AsyncMock()
+    await runner.destroy_orphans()
 
-    await core.submit(task, on_result=on_result, on_error=on_error)
-
-    on_error.assert_called_once()
-    assert "podman failed" in str(on_error.call_args)
-
-
-@pytest.mark.asyncio
-async def test_submit_prompt_includes_issue_context():
-    """The prompt passed to gemini includes repo, issue number, and description."""
-    sandbox = _make_sandbox()
-    core = AgentCore(sandbox, _make_settings())
-
-    task = Task(
-        task_id="gh-7",
-        description="Login page crashes when email has a plus sign",
-        repo="acme/webapp",
-        issue_number=42,
-        source="github",
-    )
-
-    await core.submit(task, on_result=AsyncMock())
-
-    prompt = sandbox.code_stream.call_args[0][1]  # second positional arg
-    assert "acme/webapp" in prompt or "42" in prompt
-    assert "Login page crashes" in prompt
-
-
-@pytest.mark.asyncio
-async def test_submit_without_repo_skips_clone():
-    """When task has no repo, skip git clone step."""
-    sandbox = _make_sandbox()
-    core = AgentCore(sandbox, _make_settings())
-
-    task = Task(task_id="gh-8", description="just do something", source="github")
-
-    await core.submit(task, on_result=AsyncMock())
-
-    clone_calls = [c for c in sandbox.exec.call_args_list if "git clone" in str(c)]
-    assert len(clone_calls) == 0
+    sandbox.destroy.assert_called_once_with("orphan-1")

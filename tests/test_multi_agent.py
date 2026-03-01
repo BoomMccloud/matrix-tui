@@ -1,4 +1,4 @@
-"""Tests for multi-agent routing: plan/review → Gemini, implement → Qwen."""
+"""Tests for multi-agent routing via decider: plan/review → Gemini, implement → Qwen."""
 
 import json
 from types import SimpleNamespace
@@ -26,7 +26,7 @@ def _make_tool_call(call_id, name, arguments):
 
 @pytest.mark.asyncio
 async def test_plan_implement_review_scenario():
-    """Simulate orchestrator calling plan → implement → run_tests → review → final response.
+    """Simulate decider calling plan → implement → run_tests → review → final response.
 
     Verifies:
     - All four tools are called in order
@@ -35,9 +35,9 @@ async def test_plan_implement_review_scenario():
     - The final text response is yielded
     - Context flows through conversation history (each tool result is in messages)
     """
-    from matrix_agent.agent import Agent
+    from matrix_agent.decider import Decider
 
-    # Mock settings — only need fields the agent reads
+    # Mock settings — only need fields the decider reads
     settings = SimpleNamespace(
         llm_model="test-model",
         llm_api_key="test-key",
@@ -60,7 +60,7 @@ async def test_plan_implement_review_scenario():
     sandbox.code = AsyncMock(return_value=(0, "output", ""))
     sandbox.exec = AsyncMock(return_value=(0, "all tests pass", ""))
 
-    agent = Agent(settings, sandbox)
+    decider = Decider(settings, sandbox)
 
     # Simulate 5 LLM turns:
     # Turn 1: call plan
@@ -91,11 +91,11 @@ async def test_plan_implement_review_scenario():
 
     send_update = AsyncMock()
 
-    with patch("matrix_agent.agent.litellm") as mock_litellm:
+    with patch("matrix_agent.decider.litellm") as mock_litellm:
         mock_litellm.acompletion = mock_acompletion
 
         results = []
-        async for text, image in agent.handle_message("!test:room", "add auth to the app", send_update=send_update):
+        async for text, image in decider.handle_message("!test:room", "add auth to the app", send_update=send_update):
             results.append((text, image))
 
     # Verify final response
@@ -115,6 +115,6 @@ async def test_plan_implement_review_scenario():
     assert sandbox.exec.call_count == 2  # ruff + pytest
 
     # Verify conversation history has all tool results
-    history = agent._histories["!test:room"]
+    history = decider._histories["!test:room"]
     tool_results = [m for m in history if m.get("role") == "tool"]
     assert len(tool_results) == 4  # plan, implement, run_tests, review
