@@ -62,8 +62,25 @@ if ! command -v uv &>/dev/null; then
     exit 1
 fi
 
+if ! command -v gh &>/dev/null; then
+    echo "  gh CLI not found — installing..."
+    curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
+        | dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg 2>/dev/null
+    echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
+        > /etc/apt/sources.list.d/github-cli.list
+    apt-get update -qq && apt-get install -y -qq gh
+fi
+
+# Authenticate gh if token is available and not already logged in
+GITHUB_TOKEN=$(get_env "GITHUB_TOKEN")
+if [[ -n "$GITHUB_TOKEN" ]] && ! gh auth status &>/dev/null; then
+    echo "  Authenticating gh CLI..."
+    echo "$GITHUB_TOKEN" | gh auth login --with-token
+fi
+
 echo "  podman: $(podman --version)"
 echo "  uv: $(uv --version)"
+echo "  gh: $(gh --version | head -1)"
 
 # ------------------------------------------------------------------ #
 # Build sandbox image
