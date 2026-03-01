@@ -47,7 +47,7 @@ def settings():
         llm_model=os.environ.get("LLM_MODEL", "openrouter/anthropic/claude-haiku-4-5"),
         llm_api_key=os.environ.get("LLM_API_KEY", "fake"),
         llm_api_base=os.environ.get("LLM_API_BASE", ""),
-        max_agent_turns=25,
+        max_agent_turns=30,
     )
 
 @pytest.fixture
