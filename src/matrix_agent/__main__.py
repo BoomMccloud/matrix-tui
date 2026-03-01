@@ -22,18 +22,25 @@ async def main():
     decider = Decider(settings, sandbox)
     task_runner = TaskRunner(decider, sandbox)
 
-    # Load persisted state, restore histories, destroy orphan containers
+    # Load persisted state and restore histories
     histories = await sandbox.load_state()
     decider.load_histories(histories)
-    await task_runner.destroy_orphans()
 
-    bot = Bot(settings, sandbox, decider, task_runner)
-
-    # Only start GitHub channel if a token is configured
+    # GitHub recovery: scan for open issues before starting webhook server
     github_channel = None
     if settings.github_token:
         github_channel = GitHubChannel(task_runner=task_runner, settings=settings)
+        recovered = await github_channel.recover_tasks()
         await github_channel.start()
+        for task_id, msg in recovered:
+            await task_runner.enqueue(task_id, msg, github_channel)
+
+    # Matrix recovery: sync + pre_register surviving rooms
+    bot = Bot(settings, sandbox, decider, task_runner)
+    await bot.setup()
+
+    # Now _processing contains all recovered tasks — safe to destroy orphans
+    await task_runner.destroy_orphans()
 
     try:
         await bot.run()

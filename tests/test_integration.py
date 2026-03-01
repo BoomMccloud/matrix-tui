@@ -77,6 +77,15 @@ def settings():
 @pytest.fixture
 async def sandbox(settings):
     mgr = SandboxManager(settings)
+    # Clean up stale containers from crashed previous runs
+    for suffix in ("integ-1", "integ-ipc-2", "test-multi"):
+        name = f"sandbox-{suffix}"
+        proc = await asyncio.create_subprocess_exec(
+            settings.podman_path, "rm", "-f", name,
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        await proc.wait()
     yield mgr
     for chat_id in list(mgr._containers):
         try:

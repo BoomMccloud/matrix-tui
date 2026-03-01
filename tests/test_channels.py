@@ -213,3 +213,50 @@ async def test_webhook_issue_comment(client, github_channel):
     call_args = github_channel.task_runner.enqueue.call_args
     assert call_args[0][0] == "gh-7"
     assert "logout page" in call_args[0][1]
+
+
+@pytest.mark.asyncio
+async def test_recover_tasks_returns_open_issues():
+    """recover_tasks() returns (task_id, message) pairs for open agent-task issues."""
+    from unittest.mock import patch
+
+    task_runner = _make_task_runner()
+    settings = SimpleNamespace(
+        github_webhook_port=0,
+        github_webhook_secret="",
+        github_token="ghp_fake",
+        github_repo="owner/repo",
+    )
+    channel = GitHubChannel(task_runner=task_runner, settings=settings)
+
+    gh_output = json.dumps([
+        {"number": 10, "title": "Fix bug", "body": "Details here"},
+        {"number": 11, "title": "Add feature", "body": "More details"},
+    ]).encode()
+
+    mock_proc = MagicMock()
+    mock_proc.returncode = 0
+    mock_proc.communicate = AsyncMock(return_value=(gh_output, b""))
+
+    with patch("matrix_agent.channels.asyncio.create_subprocess_exec", return_value=mock_proc):
+        results = await channel.recover_tasks()
+
+    assert len(results) == 2
+    assert results[0] == ("gh-10", "# Fix bug\n\nDetails here")
+    assert results[1] == ("gh-11", "# Add feature\n\nMore details")
+
+
+@pytest.mark.asyncio
+async def test_recover_tasks_skips_when_no_repo():
+    """recover_tasks() returns empty list when github_repo is not set."""
+    task_runner = _make_task_runner()
+    settings = SimpleNamespace(
+        github_webhook_port=0,
+        github_webhook_secret="",
+        github_token="ghp_fake",
+        github_repo="",
+    )
+    channel = GitHubChannel(task_runner=task_runner, settings=settings)
+
+    results = await channel.recover_tasks()
+    assert results == []

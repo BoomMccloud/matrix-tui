@@ -32,6 +32,7 @@ class Settings(BaseSettings):
     gemini_api_key: str = ""
     dashscope_api_key: str = ""
     github_token: str = ""
+    github_repo: str = ""
     github_webhook_port: int = 8090
     github_webhook_secret: str = ""
     ipc_base_dir: str = "/tmp/sandbox-ipc"

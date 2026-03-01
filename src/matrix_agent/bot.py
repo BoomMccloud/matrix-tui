@@ -201,7 +201,21 @@ class Bot:
             },
         )
 
-    async def run(self):
+    async def _recover_matrix_rooms(self) -> None:
+        """Pre-register tasks for Matrix rooms that survived the restart."""
+        for room_id in list(self.sandbox._containers):
+            if room_id in self.client.rooms:
+                log.info("Recovering Matrix room %s", room_id)
+                channel = MatrixChannel(self, room_id)
+                await self.task_runner.pre_register(room_id, channel)
+                await self.client.room_send(
+                    room_id, "m.room.message",
+                    {"msgtype": "m.text", "body":
+                     "I restarted. Your workspace and conversation history are intact. Send a message to continue."},
+                )
+
+    async def setup(self):
+        """Login, sync, recover Matrix rooms. Call before destroy_orphans()."""
         await self._login()
 
         self.client.add_event_callback(self._on_invite, InviteMemberEvent)
@@ -217,10 +231,14 @@ class Bot:
             log.info("catch-up join (no greeting) for %s", room_id)
             await self.client.join(room_id)
 
+        await self._recover_matrix_rooms()
+
         # State + histories already loaded in __main__.py
         self._synced = True
         log.info("Initial sync complete, now listening")
 
+    async def run(self):
+        """Start sync_forever loop. Call after setup() and destroy_orphans()."""
         async def on_sync(response):
             log.info("Sync OK: next_batch=%s", response.next_batch)
 

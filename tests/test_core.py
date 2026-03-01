@@ -84,6 +84,42 @@ async def test_enqueue_creates_queue_and_worker():
 
 
 @pytest.mark.asyncio
+async def test_pre_register():
+    """pre_register() adds task to _processing with empty queue."""
+    sandbox = _make_sandbox()
+    decider = _make_decider([])
+    runner = TaskRunner(decider, sandbox)
+    channel = MockChannel()
+
+    await runner.pre_register("task-pr", channel)
+
+    assert "task-pr" in runner._processing
+    assert "task-pr" in runner._queues
+    assert "task-pr" in runner._workers
+    assert "task-pr" in runner._channels
+    assert runner._queues["task-pr"].empty()
+
+    await runner._cleanup("task-pr")
+
+
+@pytest.mark.asyncio
+async def test_pre_register_idempotent():
+    """pre_register() is a no-op if task already registered."""
+    sandbox = _make_sandbox()
+    decider = _make_decider([])
+    runner = TaskRunner(decider, sandbox)
+    channel = MockChannel()
+
+    await runner.pre_register("task-pr2", channel)
+    original_queue = runner._queues["task-pr2"]
+
+    await runner.pre_register("task-pr2", channel)
+    assert runner._queues["task-pr2"] is original_queue  # same object
+
+    await runner._cleanup("task-pr2")
+
+
+@pytest.mark.asyncio
 async def test_worker_processes_messages_sequentially():
     """Worker processes messages via _process() in order."""
     sandbox = _make_sandbox()
@@ -183,3 +219,27 @@ async def test_destroy_orphans():
     await runner.destroy_orphans()
 
     sandbox.destroy.assert_called_once_with("orphan-1")
+
+
+@pytest.mark.asyncio
+async def test_destroy_orphans_preserves_pre_registered():
+    """destroy_orphans() does not destroy containers for pre-registered tasks."""
+    sandbox = _make_sandbox()
+    sandbox._containers = {
+        "recovered-1": "sandbox-recovered-1",
+        "orphan-1": "sandbox-orphan-1",
+    }
+    decider = _make_decider([])
+    runner = TaskRunner(decider, sandbox)
+    channel = MockChannel()
+
+    # Pre-register one task (simulates recovery)
+    await runner.pre_register("recovered-1", channel)
+
+    await runner.destroy_orphans()
+
+    # Orphan destroyed, recovered preserved
+    sandbox.destroy.assert_called_once_with("orphan-1")
+    assert "recovered-1" in runner._processing
+
+    await runner._cleanup("recovered-1")

@@ -18,6 +18,22 @@ class TaskRunner:
         self._channels: dict[str, ChannelAdapter] = {}  # task_id -> channel
         self._processing: set[str] = set()
 
+    async def pre_register(self, task_id: str, channel: ChannelAdapter) -> None:
+        """Register a task so destroy_orphans() preserves its container.
+
+        Creates queue + worker + adds to _processing without enqueuing a message.
+        The worker idles on queue.get() until a message arrives or reconcile()
+        cleans it up via is_valid().
+        """
+        if task_id in self._queues:
+            return
+        self._queues[task_id] = asyncio.Queue()
+        self._channels[task_id] = channel
+        self._processing.add(task_id)
+        self._workers[task_id] = asyncio.create_task(
+            self._worker(task_id)
+        )
+
     async def enqueue(self, task_id: str, message: str, channel: ChannelAdapter) -> None:
         """Add a message for a task. Creates the worker on first call."""
         if task_id not in self._queues:

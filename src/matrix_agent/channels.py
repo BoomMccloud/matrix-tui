@@ -34,6 +34,10 @@ class ChannelAdapter(ABC):
     @abstractmethod
     async def is_valid(self, task_id: str) -> bool: ...
 
+    async def recover_tasks(self) -> list[tuple[str, str]]:
+        """Return (task_id, message) pairs to re-enqueue after restart."""
+        return []
+
 
 class GitHubChannel(ChannelAdapter):
     system_prompt = GITHUB_SYSTEM_PROMPT
@@ -95,6 +99,45 @@ class GitHubChannel(ChannelAdapter):
             return False
         labels = [lb["name"] for lb in data.get("labels", [])]
         return "agent-task" in labels
+
+    async def recover_tasks(self) -> list[tuple[str, str]]:
+        """Scan for open agent-task issues to resume after restart."""
+        repo = self.settings.github_repo
+        if not repo:
+            log.warning("github_repo not set — skipping crash recovery for GitHub tasks")
+            return []
+
+        proc = await asyncio.create_subprocess_exec(
+            "gh", "issue", "list",
+            "--repo", repo,
+            "--label", "agent-task",
+            "--state", "open",
+            "--json", "number,title,body",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await proc.communicate()
+        if proc.returncode != 0:
+            log.error("gh issue list failed: %s", stderr.decode())
+            return []
+
+        issues = json.loads(stdout)
+        results = []
+        for issue in issues:
+            number = issue["number"]
+            task_id = f"gh-{number}"
+            message = f"# {issue['title']}\n\n{issue.get('body', '')}"
+            results.append((task_id, message))
+
+            # Post recovery comment
+            await asyncio.create_subprocess_exec(
+                "gh", "issue", "comment", str(number),
+                "--repo", repo,
+                "--body", "🤖 Bot restarted — resuming work on this issue.",
+            )
+
+        log.info("GitHub recovery: found %d open agent-task issues", len(results))
+        return results
 
     async def _handle_webhook(self, request: web.Request) -> web.Response:
         body = await request.read()
