@@ -25,8 +25,17 @@ jobs:
           echo "number=$PR_NUMBER" >> "$GITHUB_OUTPUT"
 
           # Extract linked issue from PR body (Closes #N, Fixes #N, Resolves #N)
-          BODY=$(gh api "repos/${{ github.repository }}/pulls/$PR_NUMBER" --jq '.body')
+          PR_JSON=$(gh api "repos/${{ github.repository }}/pulls/$PR_NUMBER" --jq '{body: .body, title: .title}')
+          BODY=$(echo "$PR_JSON" | jq -r '.body')
           ISSUE=$(echo "$BODY" | grep -ioP '(?:closes|fixes|resolves)\s+#\K\d+' | head -1)
+
+          # Fallback: search for an issue with a matching title
+          if [ -z "$ISSUE" ]; then
+            TITLE=$(echo "$PR_JSON" | jq -r '.title')
+            ISSUE=$(gh api "repos/${{ github.repository }}/issues?state=all&per_page=10" \
+              --jq "[.[] | select(.pull_request == null) | select(.title == \"$TITLE\")] | .[0].number // empty")
+          fi
+
           echo "issue=$ISSUE" >> "$GITHUB_OUTPUT"
 
       - name: Download failed run logs

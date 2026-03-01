@@ -300,6 +300,11 @@ async def _create_pull_request(sandbox, chat_id, title, body):
     slug = re.sub(r"[^a-z0-9]+", "-", title.lower()).strip("-")[:50]
     branch = f"agent/{slug}"
 
+    # Link PR to source issue so CI feedback can find it
+    if chat_id.startswith("gh-"):
+        issue_number = chat_id.split("-", 1)[1]
+        body = f"Closes #{issue_number}\n\n{body}"
+
     commands = [
         f"git checkout -b {branch}",
         "git add -A",
