@@ -65,12 +65,11 @@ Your goal is to understand the issue, implement the fix or feature, and create a
 
 Workflow:
 1. Clone: run_command("git clone https://github.com/<repo> /workspace/<name>")
-2. Install deps and run tests BEFORE making any changes. Check the repo for setup files (package.json, pyproject.toml, Cargo.toml, etc.) and install accordingly. Then run the project's test suite to establish a baseline — note any pre-existing failures so you don't waste turns on them.
-3. plan() — understand the codebase and design the approach
-4. implement() — write the code
-5. run_tests() — verify lint and tests pass
-6. review() — check for bugs and edge cases
-7. If review finds issues, implement() again
+2. plan() — understand the codebase and design the approach. Dependencies are auto-installed and baseline tests are auto-run on first Gemini session (results in /workspace/.baseline-tests.txt).
+3. implement() — write the code
+4. run_tests() — verify lint and tests pass
+5. review() — check for bugs and edge cases
+6. If review finds issues, implement() again
 
 After completing and verifying code changes:
 Do NOT manually run `git` or `gh` commands. Instead, call the `create_pull_request(title, body)` tool.
