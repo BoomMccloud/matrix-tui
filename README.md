@@ -179,7 +179,7 @@ then restart itself.
 | `PODMAN_PATH`             | `podman`                               | Path to podman binary                      |
 | `SANDBOX_IMAGE`           | `matrix-agent-sandbox:latest`          | Sandbox image name                         |
 | `COMMAND_TIMEOUT_SECONDS` | `120`                                  | Max time per shell command                 |
-| `CODING_TIMEOUT_SECONDS`  | `1800`                                 | Max time per Gemini CLI invocation         |
+| `CODING_TIMEOUT_SECONDS`  | `2400`                                 | Max time per Gemini CLI invocation         |
 | `MAX_AGENT_TURNS`         | `25`                                   | Max LLM tool-call rounds per message       |
 | `IPC_BASE_DIR`            | `/tmp/sandbox-ipc`                     | Host directory for sandbox IPC files       |
 
