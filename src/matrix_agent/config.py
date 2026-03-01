@@ -30,6 +30,7 @@ class Settings(BaseSettings):
     max_agent_turns: int = 25
     screenshot_script: str = "/opt/playwright/screenshot.js"
     gemini_api_key: str = ""
+    gemini_model: str = "gemini-3-flash-preview"
     dashscope_api_key: str = ""
     github_token: str = ""
     github_repo: str = ""

@@ -125,6 +125,8 @@ class SandboxManager:
         env_flags: list[str] = []
         if self.settings.gemini_api_key:
             env_flags += ["-e", f"GEMINI_API_KEY={self.settings.gemini_api_key}"]
+        if self.settings.gemini_model:
+            env_flags += ["-e", f"GEMINI_MODEL={self.settings.gemini_model}"]
         if self.settings.dashscope_api_key:
             env_flags += ["-e", f"DASHSCOPE_API_KEY={self.settings.dashscope_api_key}"]
         if self.settings.github_token:
