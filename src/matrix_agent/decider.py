@@ -75,6 +75,14 @@ Do NOT manually run `git` or `gh` commands. Instead, call the `create_pull_reque
 The tool will automatically handle branching, committing, pushing, and opening the PR.
 Provide a clear PR title and a body that references the issue (e.g., "Closes #123").
 
+When an issue is reopened with CI failure context (e.g., "CI failed on PR #N"):
+1. Check out the EXISTING PR branch (git checkout <branch>) — do NOT create a new branch
+2. Read the failure logs to understand what broke
+3. Fix the failing tests/lint
+4. run_tests() to verify the fix locally
+5. Force-push the branch: run_command("cd <repo> && git add -A && git commit -m 'Fix CI failures' && git push --force")
+Do NOT create a new PR or declare the work "already done" — the existing PR has failing CI that needs fixing.
+
 Your final message will be posted as a GitHub issue comment and may be used as context
 if the issue is reopened. Structure it clearly:
 

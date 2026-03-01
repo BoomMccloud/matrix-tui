@@ -305,6 +305,12 @@ async def _create_pull_request(sandbox, chat_id, title, body):
         issue_number = chat_id.split("-", 1)[1]
         body = f"Closes #{issue_number}\n\n{body}"
 
+    # Gate on lint + tests passing before creating the PR
+    for check_cmd, label in [("ruff check src tests", "Lint"), ("pytest tests/ -v", "Tests")]:
+        rc, stdout, stderr = await sandbox.exec(chat_id, f"cd {repo_dir} && {check_cmd}")
+        if rc != 0:
+            return f"{label} failed — fix before creating PR:\n{stdout or stderr}"
+
     commands = [
         f"git checkout -b {branch}",
         "git add -A",

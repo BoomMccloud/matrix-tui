@@ -73,7 +73,7 @@ jobs:
         run: |
           FAILURE_LOG=$(cat failure_log.txt)
 
-          COMMENT="🤖 CI failed on PR #${PR_NUMBER}. Please fix the failing tests.
+          COMMENT="⚠️ CI failed on PR #${PR_NUMBER}. Please fix the failing tests.
 
           **Run:** https://github.com/${REPO}/actions/runs/${RUN_ID}
 
