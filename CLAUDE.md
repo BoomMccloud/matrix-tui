@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What This Is
 
-Matrix Agent — a self-hosted agentic coding assistant accessible via Matrix chat. Each Matrix room gets an isolated Podman container with a full dev environment. The bot uses an LLM (default Haiku 4.5 via OpenRouter) as an orchestrator/router and delegates heavy coding work to Gemini CLI (1M token context) inside the sandbox.
+Matrix Agent — a self-hosted agentic coding assistant accessible via Matrix chat and GitHub issues. Each task gets an isolated Podman container with a full dev environment. The bot uses an LLM router (default Gemini 3 Flash) to orchestrate tools, and delegates heavy coding work to Gemini CLI (plan/review) and Qwen Code (implement) inside the sandbox.
 
 ## Commands
 
@@ -30,7 +30,7 @@ GitHub Webhook → GitHubChannel (channels.py) ──┘        │             
 - **core.py** — `TaskRunner`: channel-agnostic queue/worker lifecycle. Owns `_queues`, `_workers`, `_processing` set. `enqueue(task_id, message, channel)` creates per-task workers. `reconcile_loop()` cleans up invalid tasks every 60s.
 - **channels.py** — `ChannelAdapter` ABC (`send_update`, `deliver_result`, `deliver_error`, `is_valid`). `GitHubChannel` handles webhooks (HMAC-verified), posts status comments via `gh` CLI.
 - **bot.py** — Matrix event handling, room lifecycle. `MatrixChannel` adapter streams output to Matrix rooms. Delegates all task work to `TaskRunner.enqueue()`.
-- **decider.py** — LLM orchestrator loop (Haiku via LiteLLM). Per-task conversation history. Routes tools: `plan`/`review` → Gemini, `implement` → Qwen. Accepts per-channel `system_prompt`.
+- **decider.py** — LLM orchestrator loop (Gemini 3 Flash via LiteLLM). Per-task conversation history. Routes tools: `plan`/`review` → Gemini CLI, `implement` → Qwen Code. Accepts per-channel `system_prompt`.
 - **sandbox.py** — Podman container creation/destruction, state persistence. Named containers (`sandbox-<slug>`) enable reconnection after restart. Atomic state.json writes via tmp+rename.
 - **tools.py** — Tool schemas and execution dispatch. Tools: `plan`, `implement`, `review`, `run_command`, `read_file`, `write_file`, `run_tests`, `take_screenshot`, `self_update`, `create_pull_request`.
 - **config.py** — Pydantic settings from `.env`. Includes `github_webhook_port`, `github_webhook_secret`, `github_token`.
@@ -44,6 +44,28 @@ GitHub Webhook → GitHubChannel (channels.py) ──┘        │             
 - **Startup**: load_state → load_histories → destroy_orphans → login → sync → sync_forever
 - **Channel adapters**: New channels (Slack, Discord, CLI) require only a new `ChannelAdapter` subclass
 - **Gemini CLI**: Must run from `/workspace` for GEMINI.md auto-loading
+
+## GitHub Issue Workflow
+
+```
+GitHub Issue (labeled agent-task)
+  → Webhook → GitHubChannel → TaskRunner → Decider (router)
+    → Router clones repo
+    → plan() → Gemini CLI [SessionStart hook auto-installs deps + runs baseline tests]
+    → implement() → Qwen Code
+    → run_tests() / review()
+    → create_pull_request tool (branches, commits, pushes, opens PR)
+  → CI runs on PR
+    → If CI fails → ci-feedback.yml comments ⚠️ on issue + reopens it
+    → Bot picks up reopened issue → checks out PR branch → fixes → force-pushes
+    → CI re-runs → loop until green
+```
+
+**Safety guardrails:**
+- `git push` blocked in `run_command` — must use `create_pull_request` tool (except `--force` for CI fix flow)
+- Gemini CLI `SessionStart` hook auto-detects project type (Python/Node/Rust/Go), installs deps, runs baseline tests → results in `/workspace/.baseline-tests.txt`
+- CI feedback workflow uses `⚠️` prefix (not `🤖`) to avoid being filtered by backfill logic
+- Tool usage footer appended to all completion comments for observability
 
 ## Gotchas
 
