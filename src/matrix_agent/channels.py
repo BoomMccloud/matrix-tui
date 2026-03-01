@@ -234,7 +234,7 @@ class GitHubChannel(ChannelAdapter):
                 stdout, _ = await proc.communicate()
                 if proc.returncode == 0 and stdout:
                     for comment in stdout.decode().strip().split("\n"):
-                        if comment.strip():
+                        if comment.strip() and not comment.strip().startswith(("✅", "❌", "🤖", "⚠️")):
                             await self.task_runner.enqueue(task_id, comment.strip(), self)
 
         elif event_type == "issue_comment" and action == "created":
