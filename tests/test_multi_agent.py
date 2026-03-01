@@ -95,7 +95,7 @@ async def test_plan_implement_review_scenario():
         mock_litellm.acompletion = mock_acompletion
 
         results = []
-        async for text, image in decider.handle_message("!test:room", "add auth to the app", send_update=send_update):
+        async for text, image, status in decider.handle_message("!test:room", "add auth to the app", send_update=send_update):
             results.append((text, image))
 
     # Verify final response

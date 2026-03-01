@@ -34,7 +34,7 @@ class MockChannel(ChannelAdapter):
     async def start(self): pass
     async def stop(self): pass
     async def send_update(self, task_id, text): self.updates.append(text)
-    async def deliver_result(self, task_id, text): self.results.append(text)
+    async def deliver_result(self, task_id, text, *, status="completed"): self.results.append(text)
     async def deliver_error(self, task_id, error): self.errors.append(error)
     async def is_valid(self, task_id): return True
 
@@ -247,7 +247,7 @@ async def test_orchestrator_multi_agent_events(settings, sandbox):
     with patch("matrix_agent.decider.execute_tool", logging_execute):
         results = []
         try:
-            async for text, image in decider.handle_message(
+            async for text, image, status in decider.handle_message(
                 "test-multi",
                 "Create a file /workspace/is_palindrome.py with a function is_palindrome(s) that returns True if s is a palindrome. Use plan() first, then implement()."
             ):

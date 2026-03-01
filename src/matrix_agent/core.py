@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import time
 from .sandbox import SandboxManager
 from .decider import Decider
 from .channels import ChannelAdapter
@@ -63,6 +64,9 @@ class TaskRunner:
 
     async def _process(self, task_id: str, message: str, channel: ChannelAdapter) -> None:
         """Run the decider loop for one message."""
+        logger.info("[%s] Task started (message: %d chars)", task_id[:20], len(message))
+        t0 = time.monotonic()
+
         # Ensure container exists
         if task_id not in self.sandbox._containers:
             await self.sandbox.create(task_id)
@@ -74,16 +78,22 @@ class TaskRunner:
         # Run decider
         try:
             final_text = None
-            async for text, image in self.decider.handle_message(
+            final_status = "completed"
+            async for text, image, status in self.decider.handle_message(
                 task_id, message,
                 send_update=send_update,
                 system_prompt=channel.system_prompt,
             ):
                 if text:
                     final_text = text
+                    final_status = status
             if final_text:
-                await channel.deliver_result(task_id, final_text)
+                await channel.deliver_result(task_id, final_text, status=final_status)
+            elapsed = time.monotonic() - t0
+            logger.info("[%s] Task completed in %.1fs", task_id[:20], elapsed)
         except Exception as e:
+            elapsed = time.monotonic() - t0
+            logger.error("[%s] Task failed after %.1fs: %s", task_id[:20], elapsed, e)
             await channel.deliver_error(task_id, str(e))
             raise
 

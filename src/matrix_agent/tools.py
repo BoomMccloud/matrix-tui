@@ -241,9 +241,9 @@ async def execute_tool(
         cli = "qwen" if name == "implement" else "gemini"
         log.info("Routing %s → %s", name, cli)
         if send_update:
-            rc, stdout, stderr = await sandbox.code_stream(chat_id, args["task"], send_update, cli=cli)
+            rc, stdout, stderr = await sandbox.code_stream(chat_id, args["task"], send_update, cli=cli, auto_accept=True)
         else:
-            rc, stdout, stderr = await sandbox.code(chat_id, args["task"], cli=cli)
+            rc, stdout, stderr = await sandbox.code(chat_id, args["task"], cli=cli, auto_accept=True)
         output = stdout
         if stderr:
             output += f"\nSTDERR:\n{stderr}"

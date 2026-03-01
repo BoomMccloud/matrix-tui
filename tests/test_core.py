@@ -23,7 +23,7 @@ class MockChannel(ChannelAdapter):
     async def send_update(self, task_id: str, text: str) -> None:
         self.updates.append((task_id, text))
 
-    async def deliver_result(self, task_id: str, text: str) -> None:
+    async def deliver_result(self, task_id: str, text: str, *, status: str = "completed") -> None:
         self.results.append((task_id, text))
 
     async def deliver_error(self, task_id: str, error: str) -> None:
@@ -53,7 +53,7 @@ def _make_decider(mock_responses: list[tuple[str, bytes | None]]):
         for text, image in mock_responses:
             if isinstance(text, Exception):
                 raise text
-            yield text, image
+            yield text, image, "completed"
 
     decider.handle_message = mock_handle_message
     return decider

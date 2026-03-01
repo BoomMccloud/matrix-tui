@@ -105,6 +105,8 @@ class Decider:
         messages.append({"role": "user", "content": user_text})
         log.info("[%s] User message: %s", chat_id[:20], user_text[:200])
 
+        tool_counts: dict[str, int] = {}
+
         for turn in range(self.max_turns):
             log.info("[%s] Turn %d/%d — calling LLM (%s)", chat_id[:20], turn + 1, self.max_turns, self.settings.llm_model)
             t0 = time.monotonic()
@@ -144,11 +146,12 @@ class Decider:
                 log.info("[%s] Final response on turn %d: %s", chat_id[:20], turn + 1, (msg.content or "")[:200])
                 if msg.content:
                     self.sandbox.save_state()
-                    yield msg.content, None
+                    yield msg.content, None, "completed"
                 return
 
             # Execute each tool call
             for tc in msg.tool_calls:
+                tool_counts[tc.function.name] = tool_counts.get(tc.function.name, 0) + 1
                 log.info("[%s] Tool call: %s(%s)", chat_id[:20], tc.function.name, tc.function.arguments[:200])
                 t0 = time.monotonic()
                 text_result, image = await execute_tool(
@@ -163,8 +166,9 @@ class Decider:
                     "content": text_result,
                 })
                 if image:
-                    yield None, image
+                    yield None, image, "completed"
 
         log.warning("[%s] Hit max turns (%d)", chat_id[:20], self.max_turns)
         self.sandbox.save_state()
-        yield "Reached maximum turns. Here's where I got to — let me know if you'd like me to continue.", None
+        summary = ", ".join(f"{name} ({count})" for name, count in tool_counts.items())
+        yield f"Reached maximum turns ({self.max_turns}). Tools used: {summary}. Let me know if you'd like me to continue.", None, "max_turns"

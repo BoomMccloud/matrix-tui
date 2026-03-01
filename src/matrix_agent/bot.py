@@ -45,7 +45,7 @@ class MatrixChannel(ChannelAdapter):
             self.room_id, "m.room.message", content
         )
 
-    async def deliver_result(self, task_id: str, text: str) -> None:
+    async def deliver_result(self, task_id: str, text: str, *, status: str = "completed") -> None:
         content = {"msgtype": "m.text", "body": text}
         await self.bot.client.room_send(
             self.room_id, "m.room.message", content

@@ -26,7 +26,7 @@ class ChannelAdapter(ABC):
     async def send_update(self, task_id: str, text: str) -> None: ...
 
     @abstractmethod
-    async def deliver_result(self, task_id: str, text: str) -> None: ...
+    async def deliver_result(self, task_id: str, text: str, *, status: str = "completed") -> None: ...
 
     @abstractmethod
     async def deliver_error(self, task_id: str, error: str) -> None: ...
@@ -69,9 +69,13 @@ class GitHubChannel(ChannelAdapter):
         # No-op for GitHub — avoid spamming issues with intermediate output
         pass
 
-    async def deliver_result(self, task_id: str, text: str) -> None:
+    async def deliver_result(self, task_id: str, text: str, *, status: str = "completed") -> None:
         issue_number = task_id.split("-", 1)[1]
-        body = f"✅ Completed — {text}"
+        if status == "max_turns":
+            body = f"⚠️ {text}"
+        else:
+            body = f"✅ Completed — {text}"
+
         proc = await asyncio.create_subprocess_exec(
             "gh", "issue", "comment", issue_number, "--body", body,
             stdout=asyncio.subprocess.PIPE,
@@ -82,14 +86,16 @@ class GitHubChannel(ChannelAdapter):
             log.error("gh issue comment failed for #%s: %s", issue_number, stderr.decode())
             return
 
-        proc = await asyncio.create_subprocess_exec(
-            "gh", "issue", "close", issue_number,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        stdout, stderr = await proc.communicate()
-        if proc.returncode != 0:
-            log.error("gh issue close failed for #%s: %s", issue_number, stderr.decode())
+        # Only close the issue on successful completion
+        if status != "max_turns":
+            proc = await asyncio.create_subprocess_exec(
+                "gh", "issue", "close", issue_number,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, stderr = await proc.communicate()
+            if proc.returncode != 0:
+                log.error("gh issue close failed for #%s: %s", issue_number, stderr.decode())
 
     async def deliver_error(self, task_id: str, error: str) -> None:
         issue_number = task_id.split("-", 1)[1]
