@@ -216,7 +216,12 @@ async def execute_tool(
     args = json.loads(arguments) if arguments and arguments.strip() else {}
 
     if name == "run_command":
-        rc, stdout, stderr = await sandbox.exec(chat_id, args["command"])
+        cmd = args["command"]
+        # Only allow "git push --force" (for CI fix flow on feature branches).
+        # All other pushes must go through create_pull_request tool.
+        if re.search(r"\bgit\s+push\b", cmd) and not re.search(r"--force", cmd):
+            return "Error: git push is not allowed. Use the create_pull_request tool to submit changes.", None
+        rc, stdout, stderr = await sandbox.exec(chat_id, cmd)
         output = stdout
         if stderr:
             output += f"\nSTDERR:\n{stderr}"
