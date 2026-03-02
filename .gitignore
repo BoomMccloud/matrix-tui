@@ -9,5 +9,5 @@ state.json
 .test-ipc/
 
 # Workspace-only files (live in /workspace, not in repo)
-status.md
-GEMINI.md
+/status.md
+/GEMINI.md
