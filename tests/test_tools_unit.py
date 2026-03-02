@@ -287,6 +287,77 @@ class TestExecuteTool:
         assert len(result) == 10000 + len("\n... (truncated)")
         assert result.endswith("\n... (truncated)")
 
+    async def test_run_tests_custom_command(self):
+        """run_tests: verify it uses the custom command when provided."""
+        sandbox = self._make_sandbox()
+        sandbox.exec.side_effect = [
+            (0, "No issues.", ""),  # ruff
+            (0, "custom output", ""), # custom command
+        ]
+
+        result, image = await execute_tool(
+            sandbox, "chat-1", "run_tests", '{"command": "pytest tests/test_foo.py"}'
+        )
+
+        assert sandbox.exec.call_count == 2
+        calls = [c[0][1] for c in sandbox.exec.call_args_list]
+        assert "pytest tests/test_foo.py" in calls[1]
+        assert "custom output" in result
+
+    async def test_run_tests_custom_command_failure(self):
+        """run_tests: FAIL status when custom command fails."""
+        sandbox = self._make_sandbox()
+        sandbox.exec.side_effect = [
+            (0, "No issues.", ""),  # ruff passes
+            (1, "custom test failed", "stderr message"),  # custom command fails
+        ]
+
+        result, image = await execute_tool(
+            sandbox, "chat-1", "run_tests", '{"command": "pytest tests/test_foo.py"}'
+        )
+
+        assert sandbox.exec.call_count == 2
+        calls = [c[0][1] for c in sandbox.exec.call_args_list]
+        assert "pytest tests/test_foo.py" in calls[1]
+        assert "[FAIL]" in result
+        assert "custom test failed" in result
+        assert "STDERR:" in result
+        assert "stderr message" in result
+
+    async def test_run_tests_path_quoting(self):
+        """run_tests: path is shell-quoted."""
+        sandbox = self._make_sandbox()
+        sandbox.exec.return_value = (0, "ok", "")
+
+        await execute_tool(sandbox, "chat-1", "run_tests", '{"path": "/path with spaces"}')
+
+        calls = [c[0][1] for c in sandbox.exec.call_args_list]
+        assert "cd '/path with spaces'" in calls[0]
+        assert "cd '/path with spaces'" in calls[1]
+
+    async def test_run_tests_blocks_git_push(self):
+        """run_tests: blocks git push without --force."""
+        sandbox = self._make_sandbox()
+
+        result, image = await execute_tool(
+            sandbox, "chat-1", "run_tests", '{"command": "git push origin main"}'
+        )
+
+        assert "Error: git push is not allowed" in result
+        sandbox.exec.assert_not_called()
+
+    async def test_run_tests_allows_git_push_force(self):
+        """run_tests: allows git push --force."""
+        sandbox = self._make_sandbox()
+        sandbox.exec.return_value = (0, "pushed", "")
+
+        result, image = await execute_tool(
+            sandbox, "chat-1", "run_tests", '{"command": "git push --force origin feat"}'
+        )
+
+        assert sandbox.exec.call_count == 2
+        assert "pushed" in result
+
     async def test_run_tests_output_truncation(self):
         """run_tests: output > 10000 chars is truncated."""
         sandbox = self._make_sandbox()
