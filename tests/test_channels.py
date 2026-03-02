@@ -418,8 +418,8 @@ async def test_recover_tasks_returns_open_issues(github_channel):
         results = await github_channel.recover_tasks()
 
     assert len(results) == 2
-    assert results[0] == ("gh-10", "# Fix bug\n\nDetails here")
-    assert results[1] == ("gh-11", "# Add feature\n\nMore details")
+    assert results[0] == ("gh-10", "Repository: owner/repo\n\n# Fix bug\n\nDetails here")
+    assert results[1] == ("gh-11", "Repository: owner/repo\n\n# Add feature\n\nMore details")
 
 
 @pytest.mark.asyncio

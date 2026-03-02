@@ -152,7 +152,7 @@ class GitHubChannel(ChannelAdapter):
         for issue in issues:
             number = issue["number"]
             task_id = f"gh-{number}"
-            message = f"# {issue['title']}\n\n{issue.get('body', '')}"
+            message = f"Repository: {repo}\n\n# {issue['title']}\n\n{issue.get('body', '')}"
             results.append((task_id, message))
 
             # Post recovery comment
