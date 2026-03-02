@@ -409,10 +409,22 @@ class SandboxManager:
         failures: list[str] = []
         repo_path = f"/workspace/{repo_name}"
 
-        # 1. Run tests (use uv run for Python projects to ensure deps are available)
-        rc, stdout, stderr = await self.exec(
-            chat_id, f"cd {repo_path} && uv run ruff check . 2>&1 && uv run pytest -v 2>&1",
+        # 1. Run tests — detect project type from marker files
+        detect_and_test = (
+            f"cd {repo_path} && "
+            "if [ -f pyproject.toml ] || [ -f setup.py ]; then "
+            "  uv run ruff check . 2>&1 && uv run pytest -v 2>&1; "
+            "elif [ -f package.json ]; then "
+            "  npm run lint 2>&1; npm test 2>&1; "
+            "elif [ -f Cargo.toml ]; then "
+            "  cargo test 2>&1; "
+            "elif [ -f go.mod ]; then "
+            "  go test ./... 2>&1; "
+            "else "
+            "  echo 'No recognized project type — skipping tests'; "
+            "fi"
         )
+        rc, stdout, stderr = await self.exec(chat_id, detect_and_test)
         if rc != 0:
             test_output = (stdout + stderr)[:3000]
             failures.append(f"Tests/lint failing:\n{test_output}")
