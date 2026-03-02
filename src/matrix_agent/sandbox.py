@@ -409,9 +409,9 @@ class SandboxManager:
         failures: list[str] = []
         repo_path = f"/workspace/{repo_name}"
 
-        # 1. Run tests
+        # 1. Run tests (use uv run for Python projects to ensure deps are available)
         rc, stdout, stderr = await self.exec(
-            chat_id, f"cd {repo_path} && ruff check . 2>&1 && pytest -v 2>&1",
+            chat_id, f"cd {repo_path} && uv run ruff check . 2>&1 && uv run pytest -v 2>&1",
         )
         if rc != 0:
             test_output = (stdout + stderr)[:3000]
