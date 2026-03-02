@@ -1,5 +1,6 @@
 """Tests for CI fix detection in GitHubChannel._handle_webhook() on reopened issues."""
 
+import asyncio
 import hashlib
 import hmac
 import json
@@ -194,3 +195,80 @@ async def test_webhook_reopened_ignores_non_agent_task_label(client, github_chan
 
     assert resp.status == 200
     github_channel.task_runner.enqueue.assert_not_called()
+
+
+# ------------------------------------------------------------------ #
+# issue_comment tests
+# ------------------------------------------------------------------ #
+
+
+@pytest.mark.asyncio
+async def test_webhook_issue_comment_posts_working_if_not_processing(client, github_channel):
+    """New issue_comment posts '🤖 Working on this issue...' if task not yet processing."""
+    task_id = "gh-123"
+    github_channel.task_runner._processing = set() # Ensure not processing
+
+    payload = {
+        "action": "created",
+        "issue": {
+            "number": 123,
+            "labels": [{"name": "agent-task"}],
+        },
+        "comment": {
+            "user": {"login": "human-user"},
+            "body": "Please fix this",
+        },
+        "repository": {"full_name": "owner/repo"},
+    }
+
+    # Mock the subprocess for gh issue comment
+    mock_proc = MagicMock()
+    mock_proc.returncode = 0
+    mock_proc.communicate = AsyncMock(return_value=(b"", b""))
+
+    with patch("matrix_agent.channels.asyncio.create_subprocess_exec", return_value=mock_proc) as mock_exec:
+        resp = await _post(client, payload, event="issue_comment")
+
+    assert resp.status == 202
+    # Verify gh issue comment was called with "Working on this issue..."
+    mock_exec.assert_any_call(
+        "gh", "issue", "comment", "123",
+        "--body", "🤖 Working on this issue...",
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    # Verify enqueue was called
+    github_channel.task_runner.enqueue.assert_called_with(task_id, "Please fix this", github_channel)
+
+
+@pytest.mark.asyncio
+async def test_webhook_issue_comment_skips_working_if_already_processing(client, github_channel):
+    """Subsequent issue_comment skips 'Working' comment if task already processing."""
+    task_id = "gh-123"
+    github_channel.task_runner._processing = {task_id}
+
+    payload = {
+        "action": "created",
+        "issue": {
+            "number": 123,
+            "labels": [{"name": "agent-task"}],
+        },
+        "comment": {
+            "user": {"login": "human-user"},
+            "body": "Another comment",
+        },
+        "repository": {"full_name": "owner/repo"},
+    }
+
+    with patch("matrix_agent.channels.asyncio.create_subprocess_exec") as mock_exec:
+        resp = await _post(client, payload, event="issue_comment")
+
+    assert resp.status == 202
+    # gh issue comment should NOT be called
+    for call in mock_exec.call_args_list:
+        args = call[0]
+        if "comment" in args and "🤖 Working on this issue..." in args:
+             pytest.fail("Should not have posted 'Working' comment for already processing task")
+
+    # Verify enqueue was still called
+    github_channel.task_runner.enqueue.assert_called_with(task_id, "Another comment", github_channel)
