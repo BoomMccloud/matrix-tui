@@ -1,0 +1,18 @@
+[command]
+name = "fix-ci"
+description = "Fix CI failures on an existing PR branch"
+
+[command.steps]
+prompt = """
+CI has failed on an existing PR. Fix it:
+
+1. The PR branch should already be checked out. Verify with `git branch`.
+2. Read the CI failure context below to understand what broke.
+3. Fix the failing tests or lint issues.
+4. Run the test suite to verify: `ruff check . && pytest -v` (or project-appropriate).
+5. If tests pass, force-push: `git add -A && git commit -m "Fix CI failures" && git push --force`
+6. Write the PR URL to `/workspace/.ipc/pr-url.txt` (read it from `gh pr list --head <branch> --json url`).
+
+CI failure context:
+{{args}}
+"""

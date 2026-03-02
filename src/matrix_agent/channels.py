@@ -218,14 +218,11 @@ class GitHubChannel(ChannelAdapter):
             if proc.returncode != 0:
                 log.error("gh issue comment (working) failed for #%s: %s", issue["number"], stderr.decode())
 
-            # Enqueue title+body as first message
             repo_full_name = payload.get("repository", {}).get("full_name", "")
-            message = f"Repository: {repo_full_name}\n\n# {issue['title']}\n\n{issue.get('body', '')}"
-            await self.task_runner.enqueue(task_id, message, self)
 
-            # Backfill existing comments as bundled context
-            repo_full_name = payload.get("repository", {}).get("full_name", "")
-            if repo_full_name:
+            # For reopened issues, check for CI failure context BEFORE enqueuing
+            ci_context = None
+            if action == "reopened" and repo_full_name:
                 proc = await asyncio.create_subprocess_exec(
                     "gh", "api", f"repos/{repo_full_name}/issues/{issue['number']}/comments",
                     "--jq", "[.[] | .body]",
@@ -237,13 +234,40 @@ class GitHubChannel(ChannelAdapter):
                         bodies = json.loads(stdout.decode())
                     except (ValueError, TypeError):
                         bodies = []
-                    comments = [
-                        b for b in bodies
-                        if b.strip() and not b.strip().startswith(("🤖", "✅", "❌"))
-                    ]
-                    if comments:
-                        context = "Previous comments on this issue:\n\n" + "\n---\n".join(comments)
-                        await self.task_runner.enqueue(task_id, context, self)
+                    # Look for CI failure comments (⚠️ prefix from ci-feedback.yml)
+                    ci_comments = [b for b in bodies if b.strip().startswith("\u26a0\ufe0f")]
+                    if ci_comments:
+                        ci_context = ci_comments[-1]  # most recent CI failure
+
+            # Build and enqueue the message
+            if ci_context:
+                message = f"CI_FIX: {ci_context}\n\nRepository: {repo_full_name}\n\n# {issue['title']}\n\n{issue.get('body', '')}"
+                await self.task_runner.enqueue(task_id, message, self)
+                # Skip backfill — CI context is already included
+            else:
+                message = f"Repository: {repo_full_name}\n\n# {issue['title']}\n\n{issue.get('body', '')}"
+                await self.task_runner.enqueue(task_id, message, self)
+
+                # Backfill existing comments as bundled context
+                if repo_full_name:
+                    proc = await asyncio.create_subprocess_exec(
+                        "gh", "api", f"repos/{repo_full_name}/issues/{issue['number']}/comments",
+                        "--jq", "[.[] | .body]",
+                        stdout=asyncio.subprocess.PIPE,
+                    )
+                    stdout, _ = await proc.communicate()
+                    if proc.returncode == 0 and stdout:
+                        try:
+                            bodies = json.loads(stdout.decode())
+                        except (ValueError, TypeError):
+                            bodies = []
+                        comments = [
+                            b for b in bodies
+                            if b.strip() and not b.strip().startswith(("\U0001f916", "\u2705", "\u274c"))
+                        ]
+                        if comments:
+                            context = "Previous comments on this issue:\n\n" + "\n---\n".join(comments)
+                            await self.task_runner.enqueue(task_id, context, self)
 
         elif event_type == "issue_comment" and action == "created":
             issue = payload["issue"]

@@ -1,0 +1,64 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "name": "setup-env",
+            "type": "command",
+            "command": "/workspace/.gemini/hooks/session-start.sh",
+            "timeout": 120000
+          }
+        ]
+      }
+    ],
+    "AfterAgent": [
+      {
+        "hooks": [
+          {
+            "name": "append-status",
+            "type": "command",
+            "command": "/workspace/.gemini/hooks/after-agent.sh",
+            "timeout": 5000
+          }
+        ]
+      }
+    ],
+    "AfterTool": [
+      {
+        "hooks": [
+          {
+            "name": "progress-ipc",
+            "type": "command",
+            "command": "/workspace/.gemini/hooks/after-tool.sh",
+            "timeout": 5000
+          }
+        ]
+      }
+    ],
+    "Notification": [
+      {
+        "hooks": [
+          {
+            "name": "notify-matrix",
+            "type": "command",
+            "command": "/workspace/.gemini/hooks/notification.sh",
+            "timeout": 5000
+          }
+        ]
+      }
+    ],
+    "BeforeTool": [
+      {
+        "hooks": [
+          {
+            "name": "safety-guard",
+            "type": "command",
+            "command": "/workspace/.gemini/hooks/before-tool.sh",
+            "timeout": 5000
+          }
+        ]
+      }
+    ]
+  }
+}

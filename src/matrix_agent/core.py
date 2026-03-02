@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import re
 import time
 from .sandbox import SandboxManager
 from .decider import Decider
@@ -75,20 +76,11 @@ class TaskRunner:
         async def send_update(chunk: str) -> None:
             await channel.send_update(task_id, chunk)
 
-        # Run decider
         try:
-            final_text = None
-            final_status = "completed"
-            async for text, image, status in self.decider.handle_message(
-                task_id, message,
-                send_update=send_update,
-                system_prompt=channel.system_prompt,
-            ):
-                if text:
-                    final_text = text
-                    final_status = status
-            if final_text:
-                await channel.deliver_result(task_id, final_text, status=final_status)
+            if task_id.startswith("gh-"):
+                await self._process_github(task_id, message, channel, send_update)
+            else:
+                await self._process_matrix(task_id, message, channel, send_update)
             elapsed = time.monotonic() - t0
             logger.info("[%s] Task completed in %.1fs", task_id[:20], elapsed)
         except Exception as e:
@@ -96,6 +88,89 @@ class TaskRunner:
             logger.error("[%s] Task failed after %.1fs: %s", task_id[:20], elapsed, e)
             await channel.deliver_error(task_id, str(e))
             raise
+
+    async def _process_matrix(self, task_id: str, message: str, channel: ChannelAdapter, send_update) -> None:
+        """Existing LiteLLM decider path for Matrix chat."""
+        final_text = None
+        final_status = "completed"
+        async for text, image, status in self.decider.handle_message(
+            task_id, message,
+            send_update=send_update,
+            system_prompt=channel.system_prompt,
+        ):
+            if text:
+                final_text = text
+                final_status = status
+        if final_text:
+            await channel.deliver_result(task_id, final_text, status=final_status)
+
+    async def _process_github(self, task_id: str, message: str, channel: ChannelAdapter, send_update) -> None:
+        """Single Gemini CLI session for GitHub issues."""
+        # Parse repo from message
+        is_ci_fix = message.startswith("CI_FIX:")
+        repo_match = re.search(r"Repository:\s*(\S+)", message)
+
+        if not repo_match:
+            await channel.deliver_error(task_id, "Could not parse repository from message")
+            return
+
+        repo_full = repo_match.group(1)  # e.g. "owner/repo"
+        repo_name = repo_full.split("/")[-1]  # e.g. "repo"
+        mode = "CI fix" if is_ci_fix else "new issue"
+        logger.info("[%s] GitHub pipeline: %s for %s", task_id[:20], mode, repo_full)
+
+        # Clone repo (idempotent — skip if dir exists)
+        clone_rc, _, clone_err = await self.sandbox.exec(
+            task_id,
+            f"test -d /workspace/{repo_name}/.git || git clone https://github.com/{repo_full} /workspace/{repo_name}",
+        )
+        if clone_rc != 0:
+            await channel.deliver_error(task_id, f"Clone failed: {clone_err}")
+            return
+
+        # Build prompt
+        if is_ci_fix:
+            prompt = f"/fix-ci {message}"
+        else:
+            prompt = f"/fix-issue {message}"
+
+        # Run Gemini with retries
+        max_retries = 2
+        for attempt in range(max_retries + 1):
+            rc, stdout, pr_url = await self.sandbox.run_gemini_session(
+                task_id, prompt, send_update, repo_name,
+            )
+
+            # Validate
+            passed, failures = await self.sandbox.validate_work(task_id, repo_name)
+
+            if passed and pr_url:
+                logger.info("[%s] GitHub pipeline succeeded: %s", task_id[:20], pr_url)
+                await channel.deliver_result(task_id, f"PR created: {pr_url}")
+                return
+
+            if attempt < max_retries:
+                # Re-launch with feedback
+                failure_text = "\n".join(f"- {f}" for f in failures)
+                if not pr_url:
+                    failure_text += "\n- No PR URL found"
+                prompt = (
+                    f"Host validation failed after your previous attempt:\n"
+                    f"{failure_text}\n\n"
+                    f"Fix these issues, then create the PR.\n\n"
+                    f"Original issue:\n{message}"
+                )
+                logger.warning("[%s] Validation failed (attempt %d/%d): %s",
+                               task_id[:20], attempt + 1, max_retries + 1,
+                               "; ".join(failures))
+            else:
+                # Final failure
+                failure_text = "\n".join(f"- {f}" for f in failures)
+                await channel.deliver_error(
+                    task_id,
+                    f"Failed after {max_retries + 1} attempts. Issues:\n{failure_text}",
+                )
+                return
 
     async def reconcile(self) -> None:
         """Destroy containers for tasks that are no longer valid."""
