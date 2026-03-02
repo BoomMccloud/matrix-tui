@@ -237,6 +237,8 @@ async def test_webhook_issue_comment_posts_working_if_not_processing(client, git
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
     )
+    # Verify that we awaited the process completion
+    mock_proc.communicate.assert_called_once()
     # Verify enqueue was called
     github_channel.task_runner.enqueue.assert_called_with(task_id, "Please fix this", github_channel)
 
