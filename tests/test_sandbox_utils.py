@@ -4,9 +4,12 @@ from matrix_agent.sandbox import _container_name, _strip_ansi
 
 
 def test_container_name_alphanumeric():
-    """Test with simple alphanumeric input."""
+    """Test with simple alphanumeric input and allowed characters."""
     assert _container_name("room123") == "sandbox-room123"
     assert _container_name("Room_456") == "sandbox-Room_456"
+    assert _container_name("room.name") == "sandbox-room.name"
+    assert _container_name("room-name") == "sandbox-room-name"
+    assert _container_name("123.456-789_abc") == "sandbox-123.456-789_abc"
 
 
 def test_container_name_special_chars():
