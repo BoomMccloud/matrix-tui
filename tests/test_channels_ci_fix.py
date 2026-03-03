@@ -1,5 +1,6 @@
 """Tests for CI fix detection in GitHubChannel._handle_webhook() on reopened issues."""
 
+import asyncio
 import hashlib
 import hmac
 import json
@@ -86,8 +87,105 @@ def _mock_gh_subprocess(comment_bodies=None):
 
 
 # ------------------------------------------------------------------ #
-# CI fix detection tests
+# issue_comment tests
 # ------------------------------------------------------------------ #
+
+
+@pytest.mark.asyncio
+async def test_webhook_issue_comment_posts_working_if_new(client, github_channel):
+    """issue_comment on agent-task posts 'Working' comment if not already processing."""
+    payload = {
+        "action": "created",
+        "issue": {
+            "number": 42,
+            "labels": [{"name": "agent-task"}],
+        },
+        "comment": {
+            "body": "Please fix this other thing too",
+            "user": {"login": "human-user"},
+        },
+    }
+
+    # Mock subprocess to track calls
+    mock_proc = MagicMock()
+    mock_proc.returncode = 0
+    mock_proc.communicate = AsyncMock(return_value=(b"", b""))
+
+    with patch("matrix_agent.channels.asyncio.create_subprocess_exec", return_value=mock_proc) as mock_exec:
+        resp = await _post(client, payload, event="issue_comment")
+
+    assert resp.status == 202
+    # Verify "Working" comment was posted
+    mock_exec.assert_any_call(
+        "gh", "issue", "comment", "42",
+        "--body", "🤖 Working on this issue...",
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    # Verify task was enqueued
+    github_channel.task_runner.enqueue.assert_called_with(
+        "gh-42", "Please fix this other thing too", github_channel
+    )
+
+
+@pytest.mark.asyncio
+async def test_webhook_issue_comment_skips_working_if_processing(client, github_channel):
+    """issue_comment on agent-task skips 'Working' comment if already processing."""
+    github_channel.task_runner._processing.add("gh-42")
+
+    payload = {
+        "action": "created",
+        "issue": {
+            "number": 42,
+            "labels": [{"name": "agent-task"}],
+        },
+        "comment": {
+            "body": "Another comment",
+            "user": {"login": "human-user"},
+        },
+    }
+
+    mock_proc = MagicMock()
+    mock_proc.returncode = 0
+    mock_proc.communicate = AsyncMock(return_value=(b"", b""))
+
+    with patch("matrix_agent.channels.asyncio.create_subprocess_exec", return_value=mock_proc) as mock_exec:
+        resp = await _post(client, payload, event="issue_comment")
+
+    assert resp.status == 202
+    # Verify "Working" comment was NOT posted
+    for call in mock_exec.call_args_list:
+        args, _ = call
+        assert "Working on this issue..." not in args
+
+    # Verify task was still enqueued
+    github_channel.task_runner.enqueue.assert_called_with(
+        "gh-42", "Another comment", github_channel
+    )
+
+
+@pytest.mark.asyncio
+async def test_webhook_issue_comment_ignores_bot(client, github_channel):
+    """issue_comment from bot or with bot prefix is ignored."""
+    payload = {
+        "action": "created",
+        "issue": {
+            "number": 42,
+            "labels": [{"name": "agent-task"}],
+        },
+        "comment": {
+            "body": "🤖 Working on this issue...",
+            "user": {"login": "matrix-agent[bot]"},
+        },
+    }
+
+    with patch("matrix_agent.channels.asyncio.create_subprocess_exec") as mock_exec:
+        resp = await _post(client, payload, event="issue_comment")
+
+    assert resp.status == 200
+    assert (await resp.text()) == "ignoring bot comment"
+    mock_exec.assert_not_called()
+    github_channel.task_runner.enqueue.assert_not_called()
 
 
 @pytest.mark.asyncio

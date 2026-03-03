@@ -7,6 +7,7 @@ dependencies = [
     "aiofiles>=24.0",
     "litellm>=1.0",
     "pydantic-settings>=2.0",
+    "aiohttp>=3.13.3",
 ]
 
 [project.optional-dependencies]
@@ -18,6 +19,11 @@ asyncio_mode = "auto"
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+[dependency-groups]
+dev = [
+    "pytest-aiohttp>=1.1.0",
+]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/matrix_agent"]

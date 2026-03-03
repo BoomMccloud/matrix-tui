@@ -284,10 +284,15 @@ class GitHubChannel(ChannelAdapter):
 
             # Post "Working" comment if this is a new task (not already processing)
             if task_id not in self.task_runner._processing:
-                await asyncio.create_subprocess_exec(
+                proc = await asyncio.create_subprocess_exec(
                     "gh", "issue", "comment", str(issue["number"]),
                     "--body", "🤖 Working on this issue...",
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
                 )
+                stdout, stderr = await proc.communicate()
+                if proc.returncode != 0:
+                    log.error("gh issue comment (working) failed for #%s: %s", issue["number"], stderr.decode())
 
             comment_body = payload["comment"]["body"]
             await self.task_runner.enqueue(task_id, comment_body, self)
