@@ -10,6 +10,7 @@ import pytest
 from aiohttp.test_utils import TestClient, TestServer
 
 from matrix_agent.channels import GitHubChannel, ChannelAdapter
+from tests.conftest import SubprocessMocker
 
 
 # ------------------------------------------------------------------ #
@@ -56,6 +57,18 @@ async def github_channel():
     channel = GitHubChannel(task_runner=task_runner, settings=settings)
     yield channel
     await channel.stop()
+
+
+@pytest.fixture
+def gh_mocker():
+    """SubprocessMocker pre-configured for gh CLI calls."""
+    mocker = SubprocessMocker()
+    mocker.on("gh", "issue", "comment")
+    mocker.on("gh", "issue", "close")
+    mocker.on("gh", "issue", "view")
+    mocker.on("gh", "issue", "list")
+    mocker.on("gh", "api")
+    return mocker
 
 
 @pytest.fixture

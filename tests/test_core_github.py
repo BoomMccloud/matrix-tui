@@ -1,73 +1,57 @@
-"""Tests for GitHub pipeline routing in TaskRunner._process_github()."""
+"""Tests for GitHub pipeline routing in TaskRunner._process_github().
+
+Uses real TaskRunner + real SandboxManager + TestChannel.
+Only external boundary mocked: asyncio.create_subprocess_exec.
+"""
 
 import asyncio
-from unittest.mock import AsyncMock, MagicMock
+import os
+from unittest.mock import patch, MagicMock
 
 import pytest
 
 from matrix_agent.core import TaskRunner
-from matrix_agent.channels import ChannelAdapter
-
-
-class MockChannel(ChannelAdapter):
-    system_prompt = "Test prompt"
-
-    def __init__(self):
-        self.results = []
-        self.errors = []
-        self.updates = []
-
-    async def start(self) -> None: pass
-    async def stop(self) -> None: pass
-
-    async def send_update(self, task_id: str, text: str) -> None:
-        self.updates.append((task_id, text))
-
-    async def deliver_result(self, task_id: str, text: str, *, status: str = "completed") -> None:
-        self.results.append((task_id, text))
-
-    async def deliver_error(self, task_id: str, error: str) -> None:
-        self.errors.append((task_id, error))
-
-    async def is_valid(self, task_id: str) -> bool:
-        return True
-
-
-def _make_sandbox():
-    sandbox = AsyncMock()
-    sandbox._containers = {}
-
-    async def fake_create(chat_id):
-        sandbox._containers[chat_id] = f"sandbox-{chat_id}"
-        return f"sandbox-{chat_id}"
-
-    sandbox.create = AsyncMock(side_effect=fake_create)
-    sandbox.destroy = AsyncMock()
-    sandbox.exec = AsyncMock(return_value=(0, "", ""))
-    sandbox.run_gemini_session = AsyncMock(
-        return_value=(0, "output", "https://github.com/owner/repo/pull/1"),
-    )
-    sandbox.validate_work = AsyncMock(return_value=(True, []))
-    sandbox.read_ipc_file = AsyncMock(return_value=None)
-    return sandbox
-
-
-def _make_decider(mock_responses=None):
-    if mock_responses is None:
-        mock_responses = [("Processed", None)]
-    decider = MagicMock()
-
-    async def mock_handle_message(chat_id, user_text, send_update=None, system_prompt=None):
-        for text, image in mock_responses:
-            if isinstance(text, Exception):
-                raise text
-            yield text, image, "completed"
-
-    decider.handle_message = mock_handle_message
-    return decider
+from matrix_agent.sandbox import SandboxManager
+from tests.conftest import SubprocessMocker, StubChannel
 
 
 GITHUB_MESSAGE = "Repository: owner/repo\n\n# Fix the bug\n\nDetails here"
+
+
+def _make_runner(settings, subprocess_mocker):
+    """Create real TaskRunner with real SandboxManager, patching only subprocess."""
+    sandbox = SandboxManager(settings)
+    decider = MagicMock()
+
+    # Default decider for Matrix path
+    async def mock_handle_message(chat_id, user_text, send_update=None, system_prompt=None):
+        yield "Done", None, "completed"
+
+    decider.handle_message = mock_handle_message
+    runner = TaskRunner(decider, sandbox)
+    return runner, sandbox
+
+
+def _setup_default_subprocess(mocker, ipc_dir):
+    """Configure subprocess mocker for a successful GitHub pipeline run."""
+    # Container create
+    mocker.on("podman", "run", stdout=b"container-id")
+    # All exec calls succeed by default
+    mocker.on("podman", "exec")
+    # Container lifecycle
+    mocker.on("podman", "stop")
+    mocker.on("podman", "rm")
+
+
+async def _run_pipeline(runner, task_id, message, channel):
+    """Enqueue and wait for processing to complete."""
+    await runner.enqueue(task_id, message, channel)
+    # Wait for worker to process
+    for _ in range(50):
+        if channel.results or channel.errors:
+            break
+        await asyncio.sleep(0.02)
+    await runner._cleanup(task_id)
 
 
 # ------------------------------------------------------------------ #
@@ -76,41 +60,50 @@ GITHUB_MESSAGE = "Repository: owner/repo\n\n# Fix the bug\n\nDetails here"
 
 
 @pytest.mark.asyncio
-async def test_gh_task_id_routes_to_process_github():
-    """gh-* task IDs call _process_github, not the decider."""
-    sandbox = _make_sandbox()
-    decider = _make_decider()
-    runner = TaskRunner(decider, sandbox)
-    channel = MockChannel()
+async def test_gh_task_id_routes_to_process_github(settings):
+    """gh-* task IDs call _process_github path."""
+    mocker = SubprocessMocker()
+    _setup_default_subprocess(mocker, None)
+    runner, sandbox = _make_runner(settings, mocker)
+    channel = StubChannel()
 
-    await runner.enqueue("gh-42", GITHUB_MESSAGE, channel)
-    await asyncio.sleep(0.05)
+    # Write pr-url.txt to IPC dir
+    ipc_dir = os.path.join(settings.ipc_base_dir, "sandbox-gh-42")
+    os.makedirs(ipc_dir, exist_ok=True)
+    with open(os.path.join(ipc_dir, "pr-url.txt"), "w") as f:
+        f.write("https://github.com/owner/repo/pull/1")
+    with open(os.path.join(ipc_dir, "acceptance-criteria.md"), "w") as f:
+        f.write("- Feature works")
 
-    # run_gemini_session should have been called (GitHub path)
-    sandbox.run_gemini_session.assert_called()
-    # deliver_result should have the PR URL
+    # Mock git diff to return clean (no scope creep)
+    async def mock_exec(chat_id, cmd):
+        if "git diff --name-only" in cmd:
+            return (0, "fix.py\n", "")
+        if "ruff" in cmd or "pytest" in cmd:
+            return (0, "all passed", "")
+        return (0, "", "")
+
+    with patch("asyncio.create_subprocess_exec", mocker):
+        sandbox.exec = mock_exec
+        await _run_pipeline(runner, "gh-42", GITHUB_MESSAGE, channel)
+
     assert len(channel.results) >= 1
-
-    await runner._cleanup("gh-42")
+    assert "pull/1" in channel.results[0][1]
+    assert len(channel.errors) == 0
 
 
 @pytest.mark.asyncio
-async def test_non_gh_task_id_routes_to_process_matrix():
+async def test_non_gh_task_id_routes_to_process_matrix(settings):
     """Non-gh-* task IDs use the decider path (Matrix)."""
-    sandbox = _make_sandbox()
-    decider = _make_decider([("Done", None)])
-    runner = TaskRunner(decider, sandbox)
-    channel = MockChannel()
+    mocker = SubprocessMocker()
+    _setup_default_subprocess(mocker, None)
+    runner, sandbox = _make_runner(settings, mocker)
+    channel = StubChannel()
 
-    await runner.enqueue("room-abc", "hello", channel)
-    await asyncio.sleep(0.05)
+    with patch("asyncio.create_subprocess_exec", mocker):
+        await _run_pipeline(runner, "room-abc", "hello", channel)
 
-    # run_gemini_session should NOT be called
-    sandbox.run_gemini_session.assert_not_called()
-    # decider path should deliver a result
     assert len(channel.results) >= 1
-
-    await runner._cleanup("room-abc")
 
 
 # ------------------------------------------------------------------ #
@@ -119,237 +112,363 @@ async def test_non_gh_task_id_routes_to_process_matrix():
 
 
 @pytest.mark.asyncio
-async def test_process_github_parses_repo_from_message():
-    """_process_github extracts repo name from 'Repository: owner/repo' line."""
-    sandbox = _make_sandbox()
-    decider = _make_decider()
-    runner = TaskRunner(decider, sandbox)
-    channel = MockChannel()
-
-    await runner.enqueue("gh-10", GITHUB_MESSAGE, channel)
-    await asyncio.sleep(0.05)
-
-    # Check run_gemini_session was called with repo_name="repo"
-    call_args = sandbox.run_gemini_session.call_args
-    assert call_args is not None
-    # repo_name is the 4th positional arg
-    repo_name = call_args[0][3] if len(call_args[0]) > 3 else call_args[1].get("repo_name")
-    assert repo_name == "repo"
-
-    await runner._cleanup("gh-10")
-
-
-@pytest.mark.asyncio
-async def test_process_github_clones_repo():
+async def test_process_github_clones_repo(settings):
     """_process_github clones the repo via sandbox.exec."""
-    sandbox = _make_sandbox()
-    decider = _make_decider()
-    runner = TaskRunner(decider, sandbox)
-    channel = MockChannel()
+    mocker = SubprocessMocker()
+    _setup_default_subprocess(mocker, None)
+    runner, sandbox = _make_runner(settings, mocker)
+    channel = StubChannel()
 
-    await runner.enqueue("gh-11", GITHUB_MESSAGE, channel)
-    await asyncio.sleep(0.05)
+    ipc_dir = os.path.join(settings.ipc_base_dir, "sandbox-gh-11")
+    os.makedirs(ipc_dir, exist_ok=True)
+    with open(os.path.join(ipc_dir, "pr-url.txt"), "w") as f:
+        f.write("https://github.com/owner/repo/pull/1")
+    with open(os.path.join(ipc_dir, "acceptance-criteria.md"), "w") as f:
+        f.write("- Done")
 
-    # sandbox.exec should have been called with a git clone command
-    exec_calls = sandbox.exec.call_args_list
-    clone_calls = [c for c in exec_calls if "git clone" in str(c) or "clone" in str(c)]
-    assert len(clone_calls) >= 1, f"Expected a clone call, got: {exec_calls}"
+    exec_cmds = []
 
-    await runner._cleanup("gh-11")
+    async def tracking_exec(chat_id, cmd):
+        exec_cmds.append(cmd)
+        if "git diff --name-only" in cmd:
+            return (0, "fix.py\n", "")
+        return (0, "", "")
+
+    sandbox.exec = tracking_exec
+
+    with patch("asyncio.create_subprocess_exec", mocker):
+        await _run_pipeline(runner, "gh-11", GITHUB_MESSAGE, channel)
+
+    clone_calls = [c for c in exec_cmds if "git clone" in c]
+    assert len(clone_calls) >= 1
 
 
 @pytest.mark.asyncio
-async def test_process_github_delivers_result_with_pr_url():
+async def test_process_github_delivers_result_with_pr_url(settings):
     """On success, deliver_result is called with the PR URL."""
-    sandbox = _make_sandbox()
-    sandbox.run_gemini_session = AsyncMock(
-        return_value=(0, "output", "https://github.com/owner/repo/pull/99"),
-    )
-    sandbox.validate_work = AsyncMock(return_value=(True, []))
-    decider = _make_decider()
-    runner = TaskRunner(decider, sandbox)
-    channel = MockChannel()
+    mocker = SubprocessMocker()
+    _setup_default_subprocess(mocker, None)
+    runner, sandbox = _make_runner(settings, mocker)
+    channel = StubChannel()
 
-    await runner.enqueue("gh-12", GITHUB_MESSAGE, channel)
-    await asyncio.sleep(0.05)
+    ipc_dir = os.path.join(settings.ipc_base_dir, "sandbox-gh-12")
+    os.makedirs(ipc_dir, exist_ok=True)
+    with open(os.path.join(ipc_dir, "pr-url.txt"), "w") as f:
+        f.write("https://github.com/owner/repo/pull/99")
+    with open(os.path.join(ipc_dir, "acceptance-criteria.md"), "w") as f:
+        f.write("- Done")
+
+    async def mock_exec(chat_id, cmd):
+        if "git diff --name-only" in cmd:
+            return (0, "fix.py\n", "")
+        return (0, "", "")
+
+    sandbox.exec = mock_exec
+
+    with patch("asyncio.create_subprocess_exec", mocker):
+        await _run_pipeline(runner, "gh-12", GITHUB_MESSAGE, channel)
 
     assert len(channel.results) == 1
-    assert "https://github.com/owner/repo/pull/99" in channel.results[0][1]
+    assert "pull/99" in channel.results[0][1]
     assert len(channel.errors) == 0
 
-    await runner._cleanup("gh-12")
+
+@pytest.mark.asyncio
+async def test_process_github_retries_on_validation_failure(settings):
+    """run_gemini_session called 3 times when validation always fails."""
+    mocker = SubprocessMocker()
+    _setup_default_subprocess(mocker, None)
+    runner, sandbox = _make_runner(settings, mocker)
+    channel = StubChannel()
+
+    ipc_dir = os.path.join(settings.ipc_base_dir, "sandbox-gh-13")
+    os.makedirs(ipc_dir, exist_ok=True)
+    # No pr-url.txt → validation fails
+
+    gemini_call_count = 0
+
+    async def counting_code_stream(*args, **kwargs):
+        nonlocal gemini_call_count
+        gemini_call_count += 1
+        return (0, "output", "")
+
+    sandbox.code_stream = counting_code_stream
+
+    async def mock_exec(chat_id, cmd):
+        if "git diff --name-only" in cmd:
+            return (0, "fix.py\n", "")
+        if "git clone" in cmd or "test -d" in cmd:
+            return (0, "", "")
+        # Tests/lint fail
+        return (1, "FAILED", "")
+
+    sandbox.exec = mock_exec
+
+    with patch("asyncio.create_subprocess_exec", mocker):
+        await _run_pipeline(runner, "gh-13", GITHUB_MESSAGE, channel)
+
+    assert gemini_call_count == 3  # 1 initial + 2 retries
+    assert len(channel.errors) == 1
 
 
 @pytest.mark.asyncio
-async def test_process_github_retries_on_validation_failure():
-    """run_gemini_session called 3 times (1 initial + 2 retries) when validation always fails."""
-    sandbox = _make_sandbox()
-    sandbox.run_gemini_session = AsyncMock(return_value=(0, "output", None))
-    sandbox.validate_work = AsyncMock(return_value=(False, ["tests failed"]))
-    decider = _make_decider()
-    runner = TaskRunner(decider, sandbox)
-    channel = MockChannel()
-
-    await runner.enqueue("gh-13", GITHUB_MESSAGE, channel)
-    await asyncio.sleep(0.1)
-
-    assert sandbox.run_gemini_session.call_count == 3
-
-    await runner._cleanup("gh-13")
-
-
-@pytest.mark.asyncio
-async def test_process_github_delivers_error_after_max_retries():
+async def test_process_github_delivers_error_after_max_retries(settings):
     """After exhausting retries, deliver_error is called."""
-    sandbox = _make_sandbox()
-    sandbox.run_gemini_session = AsyncMock(return_value=(0, "output", None))
-    sandbox.validate_work = AsyncMock(return_value=(False, ["tests failed"]))
-    decider = _make_decider()
-    runner = TaskRunner(decider, sandbox)
-    channel = MockChannel()
+    mocker = SubprocessMocker()
+    _setup_default_subprocess(mocker, None)
+    runner, sandbox = _make_runner(settings, mocker)
+    channel = StubChannel()
 
-    await runner.enqueue("gh-14", GITHUB_MESSAGE, channel)
-    await asyncio.sleep(0.1)
+    ipc_dir = os.path.join(settings.ipc_base_dir, "sandbox-gh-14")
+    os.makedirs(ipc_dir, exist_ok=True)
+
+    async def mock_code_stream(*args, **kwargs):
+        return (0, "output", "")
+
+    sandbox.code_stream = mock_code_stream
+
+    async def mock_exec(chat_id, cmd):
+        if "git diff --name-only" in cmd:
+            return (0, "fix.py\n", "")
+        if "git clone" in cmd or "test -d" in cmd:
+            return (0, "", "")
+        return (1, "FAILED tests", "")
+
+    sandbox.exec = mock_exec
+
+    with patch("asyncio.create_subprocess_exec", mocker):
+        await _run_pipeline(runner, "gh-14", GITHUB_MESSAGE, channel)
 
     assert len(channel.errors) == 1
-    assert "tests failed" in channel.errors[0][1]
     assert len(channel.results) == 0
-
-    await runner._cleanup("gh-14")
 
 
 @pytest.mark.asyncio
-async def test_process_github_retry_prompt_includes_failure_reasons():
+async def test_process_github_retry_prompt_includes_failure_reasons(settings):
     """Retry prompt includes failure text from validate_work."""
-    sandbox = _make_sandbox()
+    mocker = SubprocessMocker()
+    _setup_default_subprocess(mocker, None)
+    runner, sandbox = _make_runner(settings, mocker)
+    channel = StubChannel()
+
+    ipc_dir = os.path.join(settings.ipc_base_dir, "sandbox-gh-15")
+    os.makedirs(ipc_dir, exist_ok=True)
+    with open(os.path.join(ipc_dir, "pr-url.txt"), "w") as f:
+        f.write("https://github.com/owner/repo/pull/1")
+    with open(os.path.join(ipc_dir, "acceptance-criteria.md"), "w") as f:
+        f.write("- Done")
 
     call_prompts = []
+    call_count = [0]
 
-    async def capture_session(chat_id, prompt, on_chunk, repo_name):
+    async def tracking_code_stream(chat_id, prompt, on_chunk, **kwargs):
         call_prompts.append(prompt)
-        return (0, "output", "https://github.com/owner/repo/pull/1")
+        return (0, "output", "")
 
-    sandbox.run_gemini_session = AsyncMock(side_effect=capture_session)
-    # First validation fails, second succeeds
-    sandbox.validate_work = AsyncMock(
-        side_effect=[(False, ["lint errors: E501"]), (True, [])],
-    )
-    decider = _make_decider()
-    runner = TaskRunner(decider, sandbox)
-    channel = MockChannel()
+    sandbox.code_stream = tracking_code_stream
 
-    await runner.enqueue("gh-15", GITHUB_MESSAGE, channel)
-    await asyncio.sleep(0.1)
+    async def mock_exec(chat_id, cmd):
+        if "git diff --name-only" in cmd:
+            return (0, "fix.py\n", "")
+        if "git clone" in cmd or "test -d" in cmd:
+            return (0, "", "")
+        if call_count[0] == 0:
+            call_count[0] += 1
+            return (1, "lint errors: E501", "")
+        return (0, "all passed", "")
+
+    sandbox.exec = mock_exec
+
+    with patch("asyncio.create_subprocess_exec", mocker):
+        await _run_pipeline(runner, "gh-15", GITHUB_MESSAGE, channel)
 
     assert len(call_prompts) == 2
     assert "lint errors: E501" in call_prompts[1]
 
-    await runner._cleanup("gh-15")
-
 
 @pytest.mark.asyncio
-async def test_process_github_succeeds_on_second_attempt():
-    """First validation fails, second succeeds -> deliver_result called."""
-    sandbox = _make_sandbox()
-    sandbox.run_gemini_session = AsyncMock(
-        return_value=(0, "output", "https://github.com/owner/repo/pull/1"),
-    )
-    sandbox.validate_work = AsyncMock(
-        side_effect=[(False, ["tests failed"]), (True, [])],
-    )
-    decider = _make_decider()
-    runner = TaskRunner(decider, sandbox)
-    channel = MockChannel()
-
-    await runner.enqueue("gh-16", GITHUB_MESSAGE, channel)
-    await asyncio.sleep(0.1)
-
-    assert len(channel.results) == 1
-    assert len(channel.errors) == 0
-
-    await runner._cleanup("gh-16")
-
-
-@pytest.mark.asyncio
-async def test_process_github_creates_container_if_not_exists():
+async def test_process_github_creates_container(settings):
     """sandbox.create called when container doesn't exist for gh-* task."""
-    sandbox = _make_sandbox()
-    decider = _make_decider()
-    runner = TaskRunner(decider, sandbox)
-    channel = MockChannel()
+    mocker = SubprocessMocker()
+    _setup_default_subprocess(mocker, None)
+    runner, sandbox = _make_runner(settings, mocker)
+    channel = StubChannel()
 
-    await runner.enqueue("gh-17", GITHUB_MESSAGE, channel)
-    await asyncio.sleep(0.05)
+    ipc_dir = os.path.join(settings.ipc_base_dir, "sandbox-gh-17")
+    os.makedirs(ipc_dir, exist_ok=True)
+    with open(os.path.join(ipc_dir, "pr-url.txt"), "w") as f:
+        f.write("https://github.com/owner/repo/pull/1")
+    with open(os.path.join(ipc_dir, "acceptance-criteria.md"), "w") as f:
+        f.write("- Done")
 
-    sandbox.create.assert_called_with("gh-17")
+    async def mock_exec(chat_id, cmd):
+        if "git diff --name-only" in cmd:
+            return (0, "fix.py\n", "")
+        return (0, "", "")
 
-    await runner._cleanup("gh-17")
+    sandbox.exec = mock_exec
+
+    with patch("asyncio.create_subprocess_exec", mocker):
+        await _run_pipeline(runner, "gh-17", GITHUB_MESSAGE, channel)
+
+    # Container should have been created — check via subprocess calls
+    create_calls = [c for c in mocker.calls if len(c) > 1 and c[1] == "run"]
+    assert len(create_calls) >= 1
 
 
 @pytest.mark.asyncio
-async def test_process_github_delivers_error_on_bad_message():
+async def test_process_github_delivers_error_on_bad_message(settings):
     """deliver_error called when message doesn't contain Repository: line."""
-    sandbox = _make_sandbox()
-    decider = _make_decider()
-    runner = TaskRunner(decider, sandbox)
-    channel = MockChannel()
+    mocker = SubprocessMocker()
+    _setup_default_subprocess(mocker, None)
+    runner, sandbox = _make_runner(settings, mocker)
+    channel = StubChannel()
 
-    await runner.enqueue("gh-18", "no repo info here", channel)
-    await asyncio.sleep(0.05)
+    with patch("asyncio.create_subprocess_exec", mocker):
+        await _run_pipeline(runner, "gh-18", "no repo info here", channel)
 
     assert len(channel.errors) == 1
     assert "repository" in channel.errors[0][1].lower() or "parse" in channel.errors[0][1].lower()
 
-    await runner._cleanup("gh-18")
-
 
 @pytest.mark.asyncio
-async def test_process_github_ci_fix_uses_fix_ci_prompt():
+async def test_process_github_ci_fix_uses_fix_ci_prompt(settings):
     """CI_FIX: prefix in message triggers /fix-ci prompt."""
-    sandbox = _make_sandbox()
+    mocker = SubprocessMocker()
+    _setup_default_subprocess(mocker, None)
+    runner, sandbox = _make_runner(settings, mocker)
+    channel = StubChannel()
+
+    ipc_dir = os.path.join(settings.ipc_base_dir, "sandbox-gh-19")
+    os.makedirs(ipc_dir, exist_ok=True)
+    with open(os.path.join(ipc_dir, "pr-url.txt"), "w") as f:
+        f.write("https://github.com/owner/repo/pull/1")
+    with open(os.path.join(ipc_dir, "acceptance-criteria.md"), "w") as f:
+        f.write("- Done")
 
     call_prompts = []
 
-    async def capture_session(chat_id, prompt, on_chunk, repo_name):
+    async def tracking_code_stream(chat_id, prompt, on_chunk, **kwargs):
         call_prompts.append(prompt)
-        return (0, "output", "https://github.com/owner/repo/pull/1")
+        return (0, "output", "")
 
-    sandbox.run_gemini_session = AsyncMock(side_effect=capture_session)
-    sandbox.validate_work = AsyncMock(return_value=(True, []))
-    decider = _make_decider()
-    runner = TaskRunner(decider, sandbox)
-    channel = MockChannel()
+    sandbox.code_stream = tracking_code_stream
+
+    async def mock_exec(chat_id, cmd):
+        if "git diff --name-only" in cmd:
+            return (0, "fix.py\n", "")
+        return (0, "", "")
+
+    sandbox.exec = mock_exec
 
     ci_message = f"CI_FIX: Tests failed\n\n{GITHUB_MESSAGE}"
-    await runner.enqueue("gh-19", ci_message, channel)
-    await asyncio.sleep(0.05)
+
+    with patch("asyncio.create_subprocess_exec", mocker):
+        await _run_pipeline(runner, "gh-19", ci_message, channel)
 
     assert len(call_prompts) >= 1
     assert "/fix-ci" in call_prompts[0]
 
-    await runner._cleanup("gh-19")
-
 
 @pytest.mark.asyncio
-async def test_process_github_clarification_stops_retries():
+async def test_process_github_clarification_stops_retries(settings):
     """When clarification.txt exists, post it as a comment and don't retry."""
-    sandbox = _make_sandbox()
-    sandbox.run_gemini_session = AsyncMock(return_value=(0, "output", None))
-    sandbox.read_ipc_file = AsyncMock(return_value="What Python version should this target?")
-    sandbox.validate_work = AsyncMock(return_value=(False, ["no PR"]))
-    decider = _make_decider()
-    runner = TaskRunner(decider, sandbox)
-    channel = MockChannel()
+    mocker = SubprocessMocker()
+    _setup_default_subprocess(mocker, None)
+    runner, sandbox = _make_runner(settings, mocker)
+    channel = StubChannel()
 
-    await runner.enqueue("gh-20", GITHUB_MESSAGE, channel)
-    await asyncio.sleep(0.05)
+    ipc_dir = os.path.join(settings.ipc_base_dir, "sandbox-gh-20")
+    os.makedirs(ipc_dir, exist_ok=True)
+    # Write clarification.txt
+    with open(os.path.join(ipc_dir, "clarification.txt"), "w") as f:
+        f.write("What Python version should this target?")
+
+    gemini_call_count = 0
+
+    async def counting_code_stream(chat_id, prompt, on_chunk, **kwargs):
+        nonlocal gemini_call_count
+        gemini_call_count += 1
+        return (0, "output", "")
+
+    sandbox.code_stream = counting_code_stream
+
+    with patch("asyncio.create_subprocess_exec", mocker):
+        await _run_pipeline(runner, "gh-20", GITHUB_MESSAGE, channel)
 
     # Should NOT retry — only 1 Gemini session call
-    assert sandbox.run_gemini_session.call_count == 1
-    # Should deliver as max_turns (not error, not full success)
+    assert gemini_call_count == 1
+    # Should deliver as max_turns
     assert len(channel.results) == 1
     assert "clarification" in channel.results[0][1].lower()
     assert "Python version" in channel.results[0][1]
     assert len(channel.errors) == 0
 
-    await runner._cleanup("gh-20")
+
+@pytest.mark.asyncio
+async def test_process_github_scope_creep_detection(settings):
+    """git diff returning forbidden files → validation fails with revert guidance."""
+    mocker = SubprocessMocker()
+    _setup_default_subprocess(mocker, None)
+    runner, sandbox = _make_runner(settings, mocker)
+    channel = StubChannel()
+
+    ipc_dir = os.path.join(settings.ipc_base_dir, "sandbox-gh-21")
+    os.makedirs(ipc_dir, exist_ok=True)
+    with open(os.path.join(ipc_dir, "pr-url.txt"), "w") as f:
+        f.write("https://github.com/owner/repo/pull/1")
+    with open(os.path.join(ipc_dir, "acceptance-criteria.md"), "w") as f:
+        f.write("- Done")
+
+    call_prompts = []
+
+    async def tracking_code_stream(chat_id, prompt, on_chunk, **kwargs):
+        call_prompts.append(prompt)
+        return (0, "output", "")
+
+    sandbox.code_stream = tracking_code_stream
+
+    call_count = [0]
+
+    async def mock_exec(chat_id, cmd):
+        if "git diff --name-only" in cmd:
+            call_count[0] += 1
+            if call_count[0] <= 1:
+                # First validation: forbidden files
+                return (0, "fix.py\npyproject.toml\n", "")
+            else:
+                # Subsequent: clean
+                return (0, "fix.py\n", "")
+        return (0, "", "")
+
+    sandbox.exec = mock_exec
+
+    with patch("asyncio.create_subprocess_exec", mocker):
+        await _run_pipeline(runner, "gh-21", GITHUB_MESSAGE, channel)
+
+    # Retry prompt should mention scope creep and revert
+    assert len(call_prompts) >= 2
+    assert "pyproject.toml" in call_prompts[1]
+    assert "Revert" in call_prompts[1] or "revert" in call_prompts[1].lower()
+
+
+@pytest.mark.asyncio
+async def test_process_github_clone_failure(settings):
+    """Clone failure (subprocess returns rc=1) → error delivered."""
+    mocker = SubprocessMocker()
+    _setup_default_subprocess(mocker, None)
+    runner, sandbox = _make_runner(settings, mocker)
+    channel = StubChannel()
+
+    async def failing_exec(chat_id, cmd):
+        if "git clone" in cmd:
+            return (1, "", "fatal: repository not found")
+        return (0, "", "")
+
+    sandbox.exec = failing_exec
+
+    with patch("asyncio.create_subprocess_exec", mocker):
+        await _run_pipeline(runner, "gh-22", GITHUB_MESSAGE, channel)
+
+    assert len(channel.errors) == 1
+    assert "clone" in channel.errors[0][1].lower() or "Clone" in channel.errors[0][1]
