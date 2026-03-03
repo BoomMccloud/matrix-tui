@@ -171,6 +171,18 @@ class SandboxManager:
             self.image,
             "sleep", "infinity",
         )
+        if rc != 0 and "already in use" in err:
+            log.warning("Stale container %s found — removing and retrying", name)
+            await self._run("rm", "-f", name, timeout=15)
+            rc, out, err = await self._run(
+                "run", "-d",
+                "--name", name,
+                "--shm-size=256m",
+                "-v", f"{ipc_host}:/workspace/.ipc:Z",
+                *env_flags,
+                self.image,
+                "sleep", "infinity",
+            )
         if rc != 0:
             raise RuntimeError(f"Failed to create container: {err}")
 
