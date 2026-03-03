@@ -8,10 +8,10 @@ state.json
 
 .test-ipc/
 
-# Workspace-only files (live in /workspace, not in repo — root only)
-/status.md
-/GEMINI.md
+# Workspace-only files (live in /workspace, not in repo)
+status.md
+GEMINI.md
 
 # IPC artifacts (written by Gemini inside container, should never be committed)
-/pr-url.txt
-/acceptance-criteria.md
+pr-url.txt
+acceptance-criteria.md

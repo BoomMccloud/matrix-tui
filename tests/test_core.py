@@ -36,6 +36,8 @@ class MockChannel(ChannelAdapter):
 def _make_sandbox():
     sandbox = AsyncMock()
     sandbox._containers = {}
+    sandbox.settings = MagicMock()
+    sandbox.settings.coding_timeout_seconds = 600
     
     async def fake_create(chat_id):
         sandbox._containers[chat_id] = f"sandbox-{chat_id}"

@@ -190,3 +190,5 @@ uv run pytest tests/            # run tests
 uv run ruff check src tests     # lint
 podman build -t matrix-agent-sandbox:latest -f Containerfile .  # rebuild sandbox image
 ```
+### Gotchas
+- [2026-03-03] Mocking SandboxManager with AsyncMock() needs manual settings.coding_timeout_seconds mock to avoid TypeError in asyncio.wait_for.
