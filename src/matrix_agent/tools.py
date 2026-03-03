@@ -144,6 +144,10 @@ TOOL_SCHEMAS = [
                         "type": "string",
                         "description": "Directory to run tests in. Defaults to /workspace.",
                     },
+                    "command": {
+                        "type": "string",
+                        "description": "Optional custom test command to run (e.g. 'pytest tests/test_foo.py'). If provided, it replaces the default pytest command.",
+                    },
                 },
             },
         },
@@ -218,9 +222,7 @@ async def execute_tool(
 
     if name == "run_command":
         cmd = args["command"]
-        # Only allow "git push --force" (for CI fix flow on feature branches).
-        # All other pushes must go through create_pull_request tool.
-        if re.search(r"\bgit\s+push\b", cmd) and not re.search(r"--force", cmd):
+        if _is_git_push_blocked(cmd):
             return "Error: git push is not allowed. Use the create_pull_request tool to submit changes.", None
         rc, stdout, stderr = await sandbox.exec(chat_id, cmd)
         output = stdout
@@ -261,10 +263,26 @@ async def execute_tool(
 
     if name == "run_tests":
         path = args.get("path", "/workspace")
-        lint_rc, lint_out, lint_err = await sandbox.exec(chat_id, f"cd {path} && ruff check .")
-        test_rc, test_out, test_err = await sandbox.exec(chat_id, f"cd {path} && pytest -v 2>&1 || true")
-        lint_result = lint_out or lint_err or "No issues."
-        test_result = test_out or test_err or "No output."
+        cmd = args.get("command", "pytest -v")
+        if _is_git_push_blocked(cmd):
+            return "Error: git push is not allowed. Use the create_pull_request tool to submit changes.", None
+        
+        path_q = _shell_quote(path)
+        lint_rc, lint_out, lint_err = await sandbox.exec(chat_id, f"cd {path_q} && ruff check .")
+        test_rc, test_out, test_err = await sandbox.exec(chat_id, f"cd {path_q} && {cmd}")
+        
+        lint_result = lint_out
+        if lint_err:
+            lint_result += f"\nSTDERR:\n{lint_err}"
+        if not lint_result.strip():
+            lint_result = "No issues."
+
+        test_result = test_out
+        if test_err:
+            test_result += f"\nSTDERR:\n{test_err}"
+        if not test_result.strip():
+            test_result = "No output."
+
         status = "PASS" if lint_rc == 0 and test_rc == 0 else "FAIL"
         output = f"[{status}]\n\n=== Lint (ruff) ===\n{lint_result}\n\n=== Tests (pytest) ===\n{test_result}"
         if len(output) > 10000:
@@ -288,6 +306,14 @@ async def execute_tool(
         return result, None
 
     return f"Unknown tool: {name}", None
+
+
+def _is_git_push_blocked(cmd: str) -> bool:
+    """True if cmd contains 'git push' without '--force' or '--force-with-lease'."""
+    if re.search(r"\bgit\s+push\b", cmd):
+        if not (re.search(r"--force", cmd) or re.search(r"--force-with-lease", cmd)):
+            return True
+    return False
 
 
 async def _create_pull_request(sandbox, chat_id, title, body):
