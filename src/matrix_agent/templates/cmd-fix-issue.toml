@@ -31,6 +31,12 @@ CRITICAL RULES:
 - NEVER commit IPC files (pr-url.txt, acceptance-criteria.md) — these belong in /workspace/.ipc/ only.
 - Keep changes minimal. If the issue asks for a one-line fix, make a one-line fix.
 
+NEED CLARIFICATION?
+If the issue is too vague to proceed confidently — e.g., multiple possible interpretations, missing reproduction steps, unclear which behavior is expected — you may stop early:
+1. Write your question(s) to `/workspace/.ipc/clarification.txt` (one question per line, be specific about what you need to know).
+2. Stop working. Do NOT guess or make assumptions about unclear requirements.
+The host will post your questions as a comment on the issue and wait for a human reply.
+
 Issue context:
 {{args}}
 """

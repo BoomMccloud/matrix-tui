@@ -141,6 +141,17 @@ class TaskRunner:
                 task_id, prompt, send_update, repo_name,
             )
 
+            # Check if Gemini is asking for clarification
+            clarification = await self.sandbox.read_ipc_file(task_id, "clarification.txt")
+            if clarification:
+                logger.info("[%s] Gemini requesting clarification", task_id[:20])
+                await channel.deliver_result(
+                    task_id,
+                    f"I need clarification before I can proceed:\n\n{clarification}",
+                    status="max_turns",
+                )
+                return
+
             # Validate
             passed, failures = await self.sandbox.validate_work(task_id, repo_name)
 

@@ -399,6 +399,19 @@ class SandboxManager:
 
         return rc, stdout, pr_url
 
+    async def read_ipc_file(self, chat_id: str, filename: str) -> str | None:
+        """Read a file from the container's IPC directory. Returns content or None."""
+        name = self._containers.get(chat_id)
+        if not name:
+            return None
+        ipc_host = os.path.join(self.settings.ipc_base_dir, name)
+        path = os.path.join(ipc_host, filename)
+        if os.path.exists(path):
+            with open(path) as f:
+                content = f.read().strip()
+            return content or None
+        return None
+
     async def validate_work(
         self, chat_id: str, repo_name: str,
     ) -> tuple[bool, list[str]]:

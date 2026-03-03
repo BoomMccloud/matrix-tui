@@ -48,6 +48,7 @@ def _make_sandbox():
         return_value=(0, "output", "https://github.com/owner/repo/pull/1"),
     )
     sandbox.validate_work = AsyncMock(return_value=(True, []))
+    sandbox.read_ipc_file = AsyncMock(return_value=None)
     return sandbox
 
 
@@ -327,3 +328,28 @@ async def test_process_github_ci_fix_uses_fix_ci_prompt():
     assert "/fix-ci" in call_prompts[0]
 
     await runner._cleanup("gh-19")
+
+
+@pytest.mark.asyncio
+async def test_process_github_clarification_stops_retries():
+    """When clarification.txt exists, post it as a comment and don't retry."""
+    sandbox = _make_sandbox()
+    sandbox.run_gemini_session = AsyncMock(return_value=(0, "output", None))
+    sandbox.read_ipc_file = AsyncMock(return_value="What Python version should this target?")
+    sandbox.validate_work = AsyncMock(return_value=(False, ["no PR"]))
+    decider = _make_decider()
+    runner = TaskRunner(decider, sandbox)
+    channel = MockChannel()
+
+    await runner.enqueue("gh-20", GITHUB_MESSAGE, channel)
+    await asyncio.sleep(0.05)
+
+    # Should NOT retry — only 1 Gemini session call
+    assert sandbox.run_gemini_session.call_count == 1
+    # Should deliver as max_turns (not error, not full success)
+    assert len(channel.results) == 1
+    assert "clarification" in channel.results[0][1].lower()
+    assert "Python version" in channel.results[0][1]
+    assert len(channel.errors) == 0
+
+    await runner._cleanup("gh-20")
