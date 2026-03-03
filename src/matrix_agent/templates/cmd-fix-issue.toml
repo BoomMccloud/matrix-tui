@@ -33,6 +33,7 @@ CRITICAL RULES:
 - NEVER use `git add -A` or `git add .` — always stage specific files by name.
 - NEVER commit IPC files (pr-url.txt, acceptance-criteria.md) — these belong in /workspace/.ipc/ only.
 - Keep changes minimal. If the issue asks for a one-line fix, make a one-line fix.
+- ONLY modify files directly required by the issue. Do NOT "improve" or refactor other code you encounter. If the issue asks for tests, ONLY create/modify test files — do NOT touch source code.
 - Your changes will be validated against `changed-files.txt`. Any file modified but not declared will cause validation failure and a forced retry.
 
 NEED CLARIFICATION?
