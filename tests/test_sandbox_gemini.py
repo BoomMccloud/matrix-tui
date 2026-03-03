@@ -59,54 +59,33 @@ def test_all_template_files_exist_on_disk():
 
 @pytest.mark.asyncio
 async def test_init_workspace_writes_all_templates(settings):
-    """_init_workspace() writes all template content via subprocess stdin."""
-    mocker = SubprocessMocker()
-    mocker.on("podman", "exec")
-    mocker.on("podman", "run", stdout=b"container-id")
-
+    """_init_workspace() sends a single script containing all templates via stdin."""
     sandbox = _make_sandbox(settings)
     sandbox._containers = {"test-1": "sandbox-test-1"}
 
-    written_data = []
-
-    original_call = mocker.__call__
-
-    async def capturing_call(*args, **kwargs):
-        stdin_data = kwargs.get("stdin_data")
-        if stdin_data and len(args) >= 6 and args[1] == "exec" and args[2] == "-i":
-            sh_cmd = args[6] if len(args) > 6 else ""
-            if "cat >" in str(sh_cmd):
-                dest = str(sh_cmd).split("cat > ")[-1].strip()
-                written_data.append((dest, stdin_data.decode()))
-        return await original_call(*args, **kwargs)
-
-    with patch("asyncio.create_subprocess_exec", capturing_call):
-        # _init_workspace calls self._run which calls create_subprocess_exec
-        # But _run prepends self.podman, so args[0] = "podman"
-        # Let's just mock _run directly to capture
-        pass
-
-    # Simpler approach: mock _run to capture calls
-    written_paths = []
-    written_contents = []
+    captured_stdin = []
 
     async def capture_run(*args, stdin_data=None, **kwargs):
-        if stdin_data and len(args) >= 6 and args[0] == "exec" and args[1] == "-i":
-            sh_cmd = args[5] if len(args) > 5 else ""
-            if "cat >" in sh_cmd:
-                dest = sh_cmd.split("cat > ")[-1].strip()
-                written_paths.append(dest)
-                written_contents.append(stdin_data.decode())
+        if stdin_data:
+            captured_stdin.append(stdin_data.decode())
         return (0, "", "")
 
     sandbox._run = capture_run
     await sandbox._init_workspace("sandbox-test-1")
 
+    # Should be a single _run call with all templates in the stdin script
+    assert len(captured_stdin) == 1
+    script = captured_stdin[0]
+
+    # Verify every template's content is in the script
     for template_name, container_path in TEMPLATES.items():
         expected_content = (_TEMPLATES_DIR / template_name).read_text()
-        assert container_path in written_paths, f"Template {template_name} not written to {container_path}"
-        idx = written_paths.index(container_path)
-        assert written_contents[idx] == expected_content
+        assert container_path in script, f"Template {template_name} path not in script"
+        assert expected_content in script, f"Template {template_name} content not in script"
+
+    # Verify chmod, git config, and gh auth are in the script
+    assert "chmod +x" in script
+    assert "git config --global" in script
 
 
 # ------------------------------------------------------------------ #

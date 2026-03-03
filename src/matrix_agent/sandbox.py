@@ -194,34 +194,43 @@ class SandboxManager:
 
     async def _init_workspace(self, container_name: str) -> None:
         """Initialize workspace coordination files on container creation."""
-        async def write(path: str, content: str) -> None:
-            await self._run(
-                "exec", "-i", container_name, "sh", "-c",
-                f"mkdir -p $(dirname {path}) && cat > {path}",
-                stdin_data=content.encode(),
-            )
-
-        # Write all templates to the container
+        # Build a shell script that writes all templates in one exec call
+        script_parts = []
         for template_name, container_path in TEMPLATES.items():
             content = (_TEMPLATES_DIR / template_name).read_text()
-            await write(container_path, content)
+            # Use heredoc per file — delimiter includes template name for uniqueness
+            delimiter = f"EOF_{template_name.replace('.', '_').replace('-', '_')}"
+            script_parts.append(
+                f"mkdir -p $(dirname {container_path})\n"
+                f"cat > {container_path} <<'{delimiter}'\n"
+                f"{content}\n"
+                f"{delimiter}"
+            )
 
-        # Make hook/wrapper scripts executable
+        # chmod executable templates
         exec_paths = [
             TEMPLATES[name] for name in _EXECUTABLE_TEMPLATES
             if name in TEMPLATES
         ]
         if exec_paths:
-            await self._run("exec", container_name, "chmod", "+x", *exec_paths)
+            script_parts.append(f"chmod +x {' '.join(exec_paths)}")
 
-        # Git identity for commits and PRs
-        await self._run("exec", container_name, "git", "config", "--global",
-                        "user.email", "bot@matrix-agent")
-        await self._run("exec", container_name, "git", "config", "--global",
-                        "user.name", "Matrix Agent")
-        # gh CLI auth (uses GITHUB_TOKEN env var already injected)
+        # Git identity
+        script_parts.append('git config --global user.email "bot@matrix-agent"')
+        script_parts.append('git config --global user.name "Matrix Agent"')
+
+        # gh CLI auth
         if self.settings.github_token:
-            await self._run("exec", container_name, "gh", "auth", "setup-git")
+            script_parts.append("gh auth setup-git")
+
+        script = "\n".join(script_parts)
+        rc, out, err = await self._run(
+            "exec", "-i", container_name, "sh",
+            stdin_data=script.encode(),
+            timeout=30,
+        )
+        if rc != 0:
+            log.error("_init_workspace failed for %s: %s", container_name, err[:500])
 
     async def exec(self, chat_id: str, command: str) -> tuple[int, str, str]:
         name = self._containers.get(chat_id)
