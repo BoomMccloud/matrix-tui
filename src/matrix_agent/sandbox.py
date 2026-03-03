@@ -475,12 +475,35 @@ class SandboxManager:
             changed_files = [f.strip() for f in stdout.strip().splitlines() if f.strip()]
             log.info("[%s] Scope: %d files changed: %s", chat_id[:20], len(changed_files), ", ".join(changed_files))
 
+            # Check file manifest — declared scope
+            name = self._containers.get(chat_id)
+            if name:
+                ipc_host = os.path.join(self.settings.ipc_base_dir, name)
+                manifest_path = os.path.join(ipc_host, "changed-files.txt")
+                if os.path.exists(manifest_path):
+                    with open(manifest_path) as mf:
+                        declared = {line.strip() for line in mf if line.strip()}
+                    undeclared = [f for f in changed_files if f not in declared]
+                    if undeclared:
+                        failures.append(
+                            f"Files modified outside declared scope: {', '.join(undeclared)}. "
+                            f"Declared: {', '.join(sorted(declared))}. "
+                            f"Revert: git checkout $base -- {' '.join(undeclared)}"
+                        )
+                else:
+                    failures.append(
+                        "No file manifest (changed-files.txt) found — "
+                        "write declared files to /workspace/.ipc/changed-files.txt"
+                    )
+
             # Block forbidden file patterns
             forbidden = [
                 f for f in changed_files
-                if f in ("pyproject.toml", "uv.lock", "package-lock.json", "Cargo.lock", "go.sum")
-                or f.startswith((".gemini/", "src/matrix_agent/templates/"))
-                or f in ("pr-url.txt", "acceptance-criteria.md", "status.md", "GEMINI.md")
+                if f in ("pyproject.toml", "uv.lock", "package-lock.json", "Cargo.lock", "go.sum",
+                         ".gitignore", "CLAUDE.md", "AGENTS.md", "Containerfile", "Makefile",
+                         "pr-url.txt", "acceptance-criteria.md", "status.md", "GEMINI.md")
+                or f.startswith((".gemini/", ".claude/", ".github/", "scripts/",
+                                 "src/matrix_agent/templates/"))
             ]
             if forbidden:
                 failures.append(

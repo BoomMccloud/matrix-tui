@@ -8,10 +8,14 @@ CI has failed on an existing PR. Fix it:
 
 1. The PR branch should already be checked out. Verify with `git branch`.
 2. Read the CI failure context below to understand what broke.
-3. Fix the failing tests or lint issues.
-4. Run the test suite to verify: `ruff check . && pytest -v` (or project-appropriate).
-5. If tests pass, stage ONLY the files you changed: `git add <file1> <file2> ...` (NEVER use `git add -A` or `git add .`), then commit and force-push: `git commit -m "Fix CI failures" && git push --force`
-6. Write the PR URL to `/workspace/.ipc/pr-url.txt` (read it from `gh pr list --head <branch> --json url`).
+3. **Declare scope**: Write the list of files you will modify to `/workspace/.ipc/changed-files.txt`, one file per line. Only list files you intend to change — changes to undeclared files will be rejected by the host.
+4. Fix the failing tests or lint issues.
+5. Run the test suite to verify: `ruff check . && pytest -v` (or project-appropriate).
+6. If tests pass, stage ONLY the files you changed: `git add <file1> <file2> ...` (NEVER use `git add -A` or `git add .`), then commit and force-push: `git commit -m "Fix CI failures" && git push --force`
+7. Write the PR URL to `/workspace/.ipc/pr-url.txt` (read it from `gh pr list --head <branch> --json url`).
+
+CRITICAL RULES:
+- Your changes will be validated against `changed-files.txt`. Any file modified but not declared will cause validation failure and a forced retry.
 
 CI failure context:
 {{args}}

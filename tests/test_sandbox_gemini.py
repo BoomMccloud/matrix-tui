@@ -205,6 +205,8 @@ async def test_validate_work_passes_when_all_checks_succeed(settings):
         f.write("https://github.com/owner/repo/pull/1")
     with open(os.path.join(ipc_dir, "acceptance-criteria.md"), "w") as f:
         f.write("- Feature X works\n")
+    with open(os.path.join(ipc_dir, "changed-files.txt"), "w") as f:
+        f.write("fix.py\n")
 
     async def mock_exec(chat_id, cmd):
         if "git diff --name-only" in cmd:
@@ -231,6 +233,8 @@ async def test_validate_work_fails_when_tests_fail(settings):
         f.write("https://github.com/owner/repo/pull/1")
     with open(os.path.join(ipc_dir, "acceptance-criteria.md"), "w") as f:
         f.write("- Feature X works\n")
+    with open(os.path.join(ipc_dir, "changed-files.txt"), "w") as f:
+        f.write("fix.py\n")
 
     async def mock_exec(chat_id, cmd):
         if "git diff --name-only" in cmd:
@@ -255,6 +259,8 @@ async def test_validate_work_fails_when_pr_url_missing(settings):
     os.makedirs(ipc_dir, exist_ok=True)
     with open(os.path.join(ipc_dir, "acceptance-criteria.md"), "w") as f:
         f.write("- Feature X works\n")
+    with open(os.path.join(ipc_dir, "changed-files.txt"), "w") as f:
+        f.write("fix.py\n")
 
     async def mock_exec(chat_id, cmd):
         if "git diff --name-only" in cmd:
@@ -279,6 +285,8 @@ async def test_validate_work_fails_when_acceptance_criteria_missing(settings):
     os.makedirs(ipc_dir, exist_ok=True)
     with open(os.path.join(ipc_dir, "pr-url.txt"), "w") as f:
         f.write("https://github.com/owner/repo/pull/1")
+    with open(os.path.join(ipc_dir, "changed-files.txt"), "w") as f:
+        f.write("fix.py\n")
 
     async def mock_exec(chat_id, cmd):
         if "git diff --name-only" in cmd:
@@ -305,6 +313,8 @@ async def test_validate_work_scope_creep_detection(settings):
         f.write("https://github.com/owner/repo/pull/1")
     with open(os.path.join(ipc_dir, "acceptance-criteria.md"), "w") as f:
         f.write("- Done")
+    with open(os.path.join(ipc_dir, "changed-files.txt"), "w") as f:
+        f.write("fix.py\npyproject.toml\nuv.lock\n")
 
     async def mock_exec(chat_id, cmd):
         if "git diff --name-only" in cmd:
@@ -317,6 +327,89 @@ async def test_validate_work_scope_creep_detection(settings):
     assert passed is False
     assert any("pyproject.toml" in f for f in failures)
     assert any("Revert" in f or "revert" in f.lower() for f in failures)
+
+
+@pytest.mark.asyncio
+async def test_validate_work_manifest_undeclared_file(settings):
+    """Manifest exists but changed file not declared → failure."""
+    sandbox = _make_sandbox(settings)
+    container_name = "sandbox-gh-manifest-undecl"
+    sandbox._containers = {"gh-mu": container_name}
+
+    ipc_dir = os.path.join(settings.ipc_base_dir, container_name)
+    os.makedirs(ipc_dir, exist_ok=True)
+    with open(os.path.join(ipc_dir, "pr-url.txt"), "w") as f:
+        f.write("https://github.com/owner/repo/pull/1")
+    with open(os.path.join(ipc_dir, "acceptance-criteria.md"), "w") as f:
+        f.write("- Done\n")
+    with open(os.path.join(ipc_dir, "changed-files.txt"), "w") as f:
+        f.write("fix.py\n")
+
+    async def mock_exec(chat_id, cmd):
+        if "git diff --name-only" in cmd:
+            return (0, "fix.py\nextra.py\n", "")
+        return (0, "ok\n", "")
+
+    sandbox.exec = mock_exec
+    passed, failures = await sandbox.validate_work("gh-mu", "repo")
+
+    assert passed is False
+    assert any("extra.py" in f and "outside declared scope" in f for f in failures)
+
+
+@pytest.mark.asyncio
+async def test_validate_work_manifest_missing(settings):
+    """No manifest file → failure."""
+    sandbox = _make_sandbox(settings)
+    container_name = "sandbox-gh-manifest-miss"
+    sandbox._containers = {"gh-mm": container_name}
+
+    ipc_dir = os.path.join(settings.ipc_base_dir, container_name)
+    os.makedirs(ipc_dir, exist_ok=True)
+    with open(os.path.join(ipc_dir, "pr-url.txt"), "w") as f:
+        f.write("https://github.com/owner/repo/pull/1")
+    with open(os.path.join(ipc_dir, "acceptance-criteria.md"), "w") as f:
+        f.write("- Done\n")
+    # No changed-files.txt
+
+    async def mock_exec(chat_id, cmd):
+        if "git diff --name-only" in cmd:
+            return (0, "fix.py\n", "")
+        return (0, "ok\n", "")
+
+    sandbox.exec = mock_exec
+    passed, failures = await sandbox.validate_work("gh-mm", "repo")
+
+    assert passed is False
+    assert any("manifest" in f.lower() or "changed-files.txt" in f for f in failures)
+
+
+@pytest.mark.asyncio
+async def test_validate_work_manifest_declares_forbidden_file(settings):
+    """Manifest declares a forbidden file → denylist still catches it."""
+    sandbox = _make_sandbox(settings)
+    container_name = "sandbox-gh-manifest-forb"
+    sandbox._containers = {"gh-mf": container_name}
+
+    ipc_dir = os.path.join(settings.ipc_base_dir, container_name)
+    os.makedirs(ipc_dir, exist_ok=True)
+    with open(os.path.join(ipc_dir, "pr-url.txt"), "w") as f:
+        f.write("https://github.com/owner/repo/pull/1")
+    with open(os.path.join(ipc_dir, "acceptance-criteria.md"), "w") as f:
+        f.write("- Done\n")
+    with open(os.path.join(ipc_dir, "changed-files.txt"), "w") as f:
+        f.write("fix.py\n.gitignore\n")
+
+    async def mock_exec(chat_id, cmd):
+        if "git diff --name-only" in cmd:
+            return (0, "fix.py\n.gitignore\n", "")
+        return (0, "ok\n", "")
+
+    sandbox.exec = mock_exec
+    passed, failures = await sandbox.validate_work("gh-mf", "repo")
+
+    assert passed is False
+    assert any(".gitignore" in f for f in failures)
 
 
 @pytest.mark.asyncio

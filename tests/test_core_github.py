@@ -74,6 +74,8 @@ async def test_gh_task_id_routes_to_process_github(settings):
         f.write("https://github.com/owner/repo/pull/1")
     with open(os.path.join(ipc_dir, "acceptance-criteria.md"), "w") as f:
         f.write("- Feature works")
+    with open(os.path.join(ipc_dir, "changed-files.txt"), "w") as f:
+        f.write("fix.py\n")
 
     # Mock git diff to return clean (no scope creep)
     async def mock_exec(chat_id, cmd):
@@ -125,6 +127,8 @@ async def test_process_github_clones_repo(settings):
         f.write("https://github.com/owner/repo/pull/1")
     with open(os.path.join(ipc_dir, "acceptance-criteria.md"), "w") as f:
         f.write("- Done")
+    with open(os.path.join(ipc_dir, "changed-files.txt"), "w") as f:
+        f.write("fix.py\n")
 
     exec_cmds = []
 
@@ -157,6 +161,8 @@ async def test_process_github_delivers_result_with_pr_url(settings):
         f.write("https://github.com/owner/repo/pull/99")
     with open(os.path.join(ipc_dir, "acceptance-criteria.md"), "w") as f:
         f.write("- Done")
+    with open(os.path.join(ipc_dir, "changed-files.txt"), "w") as f:
+        f.write("fix.py\n")
 
     async def mock_exec(chat_id, cmd):
         if "git diff --name-only" in cmd:
@@ -257,6 +263,8 @@ async def test_process_github_retry_prompt_includes_failure_reasons(settings):
         f.write("https://github.com/owner/repo/pull/1")
     with open(os.path.join(ipc_dir, "acceptance-criteria.md"), "w") as f:
         f.write("- Done")
+    with open(os.path.join(ipc_dir, "changed-files.txt"), "w") as f:
+        f.write("fix.py\n")
 
     call_prompts = []
     call_count = [0]
@@ -300,6 +308,8 @@ async def test_process_github_creates_container(settings):
         f.write("https://github.com/owner/repo/pull/1")
     with open(os.path.join(ipc_dir, "acceptance-criteria.md"), "w") as f:
         f.write("- Done")
+    with open(os.path.join(ipc_dir, "changed-files.txt"), "w") as f:
+        f.write("fix.py\n")
 
     async def mock_exec(chat_id, cmd):
         if "git diff --name-only" in cmd:
@@ -345,6 +355,8 @@ async def test_process_github_ci_fix_uses_fix_ci_prompt(settings):
         f.write("https://github.com/owner/repo/pull/1")
     with open(os.path.join(ipc_dir, "acceptance-criteria.md"), "w") as f:
         f.write("- Done")
+    with open(os.path.join(ipc_dir, "changed-files.txt"), "w") as f:
+        f.write("fix.py\n")
 
     call_prompts = []
 
@@ -419,6 +431,8 @@ async def test_process_github_scope_creep_detection(settings):
         f.write("https://github.com/owner/repo/pull/1")
     with open(os.path.join(ipc_dir, "acceptance-criteria.md"), "w") as f:
         f.write("- Done")
+    with open(os.path.join(ipc_dir, "changed-files.txt"), "w") as f:
+        f.write("fix.py\npyproject.toml\n")
 
     call_prompts = []
 

@@ -12,6 +12,7 @@ Tests:
   6. podman stop + podman rm (cleanup)
 """
 
+import asyncio
 import subprocess
 import sys
 import urllib.request
@@ -112,6 +113,7 @@ def main():
         url = f"http://localhost:{HOST_PORT}/"
         try:
             resp = urllib.request.urlopen(url, timeout=5)
+            body = resp.read().decode()
             assert resp.status == 200, f"Expected 200, got {resp.status}"
             print(f"  ✓ HTTP server reachable at {url} (status {resp.status})")
             passed += 1

@@ -9,16 +9,17 @@ You are fixing a GitHub issue. Follow this workflow exactly:
 1. Run `/init` to generate a project-specific GEMINI.md for this repo.
 2. Read `/workspace/.baseline-tests.txt` to understand the test baseline before your changes.
 3. **Plan**: Analyze the codebase, identify the MINIMAL set of files to change, and design your approach. Less is more — a focused 1-3 file change is better than a sweeping refactor.
-4. **Acceptance Criteria**: Write testable acceptance criteria to `/workspace/.ipc/acceptance-criteria.md`. Each criterion should be specific and verifiable (e.g., "Function X returns Y when given Z", "Test test_foo passes").
-5. **Implement**: Use the `delegate-qwen` skill to write/modify code. Pass the full plan as context.
-6. **Test**: Run the project's test suite. For Python: `ruff check . && pytest -v`. For Node: `npm run lint && npm test`.
-7. If tests fail, fix and re-test (max 3 attempts).
-8. **Review**: Run `git diff` and review your changes for correctness, security issues, scope creep, and whether each acceptance criterion is met.
+4. **Declare scope**: Write the list of files you will modify to `/workspace/.ipc/changed-files.txt`, one file per line. Only list files you intend to change — changes to undeclared files will be rejected by the host.
+5. **Acceptance Criteria**: Write testable acceptance criteria to `/workspace/.ipc/acceptance-criteria.md`. Each criterion should be specific and verifiable (e.g., "Function X returns Y when given Z", "Test test_foo passes").
+6. **Implement**: Use the `delegate-qwen` skill to write/modify code. Pass the full plan as context.
+7. **Test**: Run the project's test suite. For Python: `ruff check . && pytest -v`. For Node: `npm run lint && npm test`.
+8. If tests fail, fix and re-test (max 3 attempts).
+9. **Review**: Run `git diff` and review your changes for correctness, security issues, scope creep, and whether each acceptance criterion is met.
    - SCOPE CHECK: If you modified files not directly related to the issue, revert them with `git checkout -- <file>`.
    - NEVER modify: pyproject.toml, uv.lock, package-lock.json, Cargo.lock, go.sum, or any lock/manifest file unless the issue specifically requires it.
    - NEVER modify files under `.gemini/`, `templates/`, or `/workspace/.ipc/` in the repo.
-9. If review finds issues, fix and re-test.
-10. **Create PR**:
+10. If review finds issues, fix and re-test.
+11. **Create PR**:
     - Create a branch: `git checkout -b agent/<slug>`
     - Stage ONLY the files you intentionally changed: `git add <file1> <file2> ...` (NEVER use `git add -A` or `git add .`)
     - Commit: `git commit -m "<title>"`
@@ -30,6 +31,7 @@ CRITICAL RULES:
 - NEVER use `git add -A` or `git add .` — always stage specific files by name.
 - NEVER commit IPC files (pr-url.txt, acceptance-criteria.md) — these belong in /workspace/.ipc/ only.
 - Keep changes minimal. If the issue asks for a one-line fix, make a one-line fix.
+- Your changes will be validated against `changed-files.txt`. Any file modified but not declared will cause validation failure and a forced retry.
 
 NEED CLARIFICATION?
 If the issue is too vague to proceed confidently — e.g., multiple possible interpretations, missing reproduction steps, unclear which behavior is expected — you may stop early:
