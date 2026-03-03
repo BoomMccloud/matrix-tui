@@ -6,6 +6,8 @@ description = "Fix CI failures on an existing PR branch"
 prompt = """
 CI has failed on an existing PR. Fix it:
 
+IMPORTANT: All IPC files (pr-url.txt, acceptance-criteria.md, changed-files.txt) MUST be written to /workspace/.ipc/ — this is a host-mounted directory OUTSIDE the repo. Writing them inside the cloned repo will cause validation failure.
+
 1. The PR branch should already be checked out. Verify with `git branch`.
 2. Read the CI failure context below to understand what broke.
 3. **Declare scope**: Write the list of files you will modify to `/workspace/.ipc/changed-files.txt`, one file per line. Only list files you intend to change — changes to undeclared files will be rejected by the host.
