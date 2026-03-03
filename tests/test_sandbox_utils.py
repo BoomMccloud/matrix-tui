@@ -16,20 +16,24 @@ def test_container_name_special_chars():
     """Test with special characters that should be replaced by dashes."""
     # Matrix room IDs usually look like !hash:server.tld
     assert _container_name("!room:example.com") == "sandbox-room-example.com"
-    # Multiple special chars in a row should be collapsed if they are adjacent? 
-    # Actually re.sub(r"[^a-zA-Z0-9_.-]", "-", chat_id) replaces each char with a dash.
+    # Multiple special chars in a row should be replaced by multiple dashes
+    # (re.sub with [^...] replaces each char individually)
     assert _container_name("abc#$%123") == "sandbox-abc---123"
+    # Dots and underscores should be preserved
+    assert _container_name("user_name.room") == "sandbox-user_name.room"
 
 
 def test_container_name_stripping():
     """Test that leading/trailing dashes are stripped from the slug."""
     assert _container_name("!!!room!!!") == "sandbox-room"
+    assert _container_name("---room---") == "sandbox-room"
     assert _container_name("###") == "sandbox-"
 
 
 def test_container_name_empty():
-    """Test with empty string."""
+    """Test with empty string or only special characters."""
     assert _container_name("") == "sandbox-"
+    assert _container_name("!!!") == "sandbox-"
 
 
 def test_container_name_long():
@@ -51,6 +55,14 @@ def test_strip_ansi_colors():
     assert _strip_ansi("\x1b[44;37mwhite on blue\x1b[0m") == "white on blue"
 
 
+def test_strip_ansi_extended_colors():
+    """Test stripping 256-color and TrueColor sequences."""
+    # 256-color: ESC[38;5;Nm
+    assert _strip_ansi("\x1b[38;5;214mOrange\x1b[0m") == "Orange"
+    # TrueColor: ESC[38;2;R;G;Bm
+    assert _strip_ansi("\x1b[38;2;255;165;0mTrueOrange\x1b[0m") == "TrueOrange"
+
+
 def test_strip_ansi_sequences():
     """Test stripping various ANSI escape sequences (cursor, clear, etc.)."""
     # [H: cursor home, [2J: clear screen
@@ -59,6 +71,15 @@ def test_strip_ansi_sequences():
     assert _strip_ansi("Loading...\x1b[KDone") == "Loading...Done"
     # [1A: cursor up
     assert _strip_ansi("Line 1\n\x1b[1ALine 2") == "Line 1\nLine 2"
+
+
+def test_strip_ansi_extended_sequences():
+    """Test stripping ANSI sequences with '?' and 'h/l' (set/reset mode)."""
+    # [?25h and [?25l are common for hiding/showing cursor
+    assert _strip_ansi("\x1b[?25hVisible") == "Visible"
+    assert _strip_ansi("\x1b[?25lHidden") == "Hidden"
+    # Other set/reset mode sequences
+    assert _strip_ansi("\x1b[?1049hAlternateScreen") == "AlternateScreen"
 
 
 def test_strip_ansi_empty():

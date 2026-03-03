@@ -46,7 +46,7 @@ _EXECUTABLE_TEMPLATES = {
 
 STATE_PATH = "/home/matrix-tui/state.json"
 
-_ANSI_RE = re.compile(r"\x1b\[[0-9;]*[mABCDEFGHJKSTfisu]")
+_ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[a-zA-Z]")
 
 
 def _strip_ansi(text: str) -> str:
