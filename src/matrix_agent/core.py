@@ -70,19 +70,34 @@ class TaskRunner:
 
         # Ensure container exists
         if task_id not in self.sandbox._containers:
+            logger.info("[%s] Creating container...", task_id[:20])
             await self.sandbox.create(task_id)
+            logger.info("[%s] Container ready", task_id[:20])
 
         # Define send_update callback for streaming
         async def send_update(chunk: str) -> None:
             await channel.send_update(task_id, chunk)
 
+        # Overall timeout: coding_timeout + buffer for setup
+        overall_timeout = self.sandbox.settings.coding_timeout_seconds + 300
+
         try:
             if task_id.startswith("gh-"):
-                await self._process_github(task_id, message, channel, send_update)
+                await asyncio.wait_for(
+                    self._process_github(task_id, message, channel, send_update),
+                    timeout=overall_timeout,
+                )
             else:
-                await self._process_matrix(task_id, message, channel, send_update)
+                await asyncio.wait_for(
+                    self._process_matrix(task_id, message, channel, send_update),
+                    timeout=overall_timeout,
+                )
             elapsed = time.monotonic() - t0
             logger.info("[%s] Task completed in %.1fs", task_id[:20], elapsed)
+        except asyncio.TimeoutError:
+            elapsed = time.monotonic() - t0
+            logger.error("[%s] Task timed out after %.1fs", task_id[:20], elapsed)
+            await channel.deliver_error(task_id, f"Task timed out after {int(elapsed)}s")
         except Exception as e:
             elapsed = time.monotonic() - t0
             logger.error("[%s] Task failed after %.1fs: %s", task_id[:20], elapsed, e)
