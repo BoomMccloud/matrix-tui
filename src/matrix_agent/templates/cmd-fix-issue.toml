@@ -20,7 +20,9 @@ You are fixing a GitHub issue. Follow this workflow exactly:
     - Stage and commit: `git add -A && git commit -m "<title>"`
     - Push: `git push -u origin agent/<slug>`
     - Open PR: `gh pr create --title "<title>" --body "Closes #<number>\n\n<summary>"`
-    - Write the PR URL to `/workspace/.ipc/pr-url.txt`
+    - Write the PR URL to `/workspace/.ipc/pr-url.txt` (IMPORTANT: this is /workspace/.ipc/, NOT the repo directory)
+
+IMPORTANT: Never commit IPC files (pr-url.txt, acceptance-criteria.md) to the git repo. These belong in /workspace/.ipc/ only.
 
 Issue context:
 {{args}}
