@@ -11,4 +11,10 @@ if echo "$COMMAND" | grep -q 'git push' && ! echo "$COMMAND" | grep -q '\-\-forc
   exit 2
 fi
 
+# Block "git add -A" and "git add ." to prevent scope creep
+if echo "$COMMAND" | grep -q 'git add -A\|git add \.\|git add --all'; then
+  echo '{"error": "git add -A / git add . is blocked. Stage specific files by name: git add <file1> <file2> ..."}'
+  exit 2
+fi
+
 echo '{}'

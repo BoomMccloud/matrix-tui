@@ -429,12 +429,26 @@ class SandboxManager:
             test_output = (stdout + stderr)[:3000]
             failures.append(f"Tests/lint failing:\n{test_output}")
 
-        # 2. Check scope
+        # 2. Check scope — flag forbidden files and excessive changes
         rc, stdout, _ = await self.exec(
-            chat_id, f"cd {repo_path} && git diff --stat HEAD~1 2>/dev/null || echo 'no commits'",
+            chat_id, f"cd {repo_path} && git diff --name-only HEAD~1 2>/dev/null || echo 'no commits'",
         )
-        if stdout.strip():
-            log.info("[%s] Scope: %s", chat_id[:20], stdout.strip()[:500])
+        if stdout.strip() and stdout.strip() != "no commits":
+            changed_files = [f.strip() for f in stdout.strip().splitlines() if f.strip()]
+            log.info("[%s] Scope: %d files changed: %s", chat_id[:20], len(changed_files), ", ".join(changed_files))
+
+            # Block forbidden file patterns
+            forbidden = [
+                f for f in changed_files
+                if f in ("pyproject.toml", "uv.lock", "package-lock.json", "Cargo.lock", "go.sum")
+                or f.startswith((".gemini/", "src/matrix_agent/templates/"))
+                or f in ("pr-url.txt", "acceptance-criteria.md", "status.md", "GEMINI.md")
+            ]
+            if forbidden:
+                failures.append(
+                    f"Scope creep: modified forbidden files: {', '.join(forbidden)}. "
+                    f"Revert with: git checkout HEAD~1 -- {' '.join(forbidden)}"
+                )
 
         # 3. Check pr-url.txt exists
         name = self._containers.get(chat_id)

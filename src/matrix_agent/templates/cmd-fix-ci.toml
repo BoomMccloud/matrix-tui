@@ -10,7 +10,7 @@ CI has failed on an existing PR. Fix it:
 2. Read the CI failure context below to understand what broke.
 3. Fix the failing tests or lint issues.
 4. Run the test suite to verify: `ruff check . && pytest -v` (or project-appropriate).
-5. If tests pass, force-push: `git add -A && git commit -m "Fix CI failures" && git push --force`
+5. If tests pass, stage ONLY the files you changed: `git add <file1> <file2> ...` (NEVER use `git add -A` or `git add .`), then commit and force-push: `git commit -m "Fix CI failures" && git push --force`
 6. Write the PR URL to `/workspace/.ipc/pr-url.txt` (read it from `gh pr list --head <branch> --json url`).
 
 CI failure context:
