@@ -464,8 +464,12 @@ class SandboxManager:
             failures.append(f"Tests/lint failing:\n{test_output}")
 
         # 2. Check scope — flag forbidden files and excessive changes
+        # Compare against the merge base with main/master to only see the bot's changes
         rc, stdout, _ = await self.exec(
-            chat_id, f"cd {repo_path} && git diff --name-only HEAD~1 2>/dev/null || echo 'no commits'",
+            chat_id,
+            f"cd {repo_path} && "
+            "base=$(git merge-base HEAD origin/main 2>/dev/null || git merge-base HEAD origin/master 2>/dev/null || echo HEAD~1) && "
+            "git diff --name-only $base HEAD 2>/dev/null || echo 'no commits'",
         )
         if stdout.strip() and stdout.strip() != "no commits":
             changed_files = [f.strip() for f in stdout.strip().splitlines() if f.strip()]
