@@ -436,7 +436,7 @@ async def test_recover_tasks_skips_when_no_repo():
 async def test_github_channel_send_update_is_noop(github_channel):
     """send_update() is a no-op and returns None."""
     with patch("matrix_agent.channels.asyncio.create_subprocess_exec") as mock_exec:
-        result = await github_channel.send_update("gh-123", "intermediate progress")
+        result = await github_channel.send_update("task-1", "some chunk")
 
     assert result is None
     mock_exec.assert_not_called()
