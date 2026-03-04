@@ -6,7 +6,7 @@ Real tmp_path for IPC and state files.
 
 import json
 import os
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -580,3 +580,87 @@ async def test_create_retry_on_already_in_use(settings):
     rm_calls = [c for c in mocker.calls if c[:3] == ("podman", "rm", "-f")]
     assert len(rm_calls) == 1
     assert rm_calls[0][3] == "sandbox-retry-chat"
+
+
+# ------------------------------------------------------------------ #
+# Group H: screenshot()
+# ------------------------------------------------------------------ #
+
+
+@pytest.mark.asyncio
+async def test_screenshot_success(settings, tmp_path):
+    """screenshot() returns bytes on success."""
+    mocker = SubprocessMocker()
+    mocker.on("podman", "exec", returncode=0)
+    mocker.on("podman", "cp", returncode=0)
+
+    sandbox = SandboxManager(settings)
+    sandbox._containers = {"room-1": "sandbox-room-1"}
+
+    fake_png = b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR"
+    host_file = tmp_path / "screenshot_host.png"
+
+    async def side_effect(*args, **kwargs):
+        if len(args) > 1 and args[1] == "cp":
+            # sandbox.screenshot() calls: _run("cp", f"{name}:{container_path}", host_path)
+            # args will be ("podman", "cp", "sandbox-room-1:/tmp/screenshot.png", host_path)
+            dest_path = args[3]
+            with open(dest_path, "wb") as f:
+                f.write(fake_png)
+        return await mocker(*args, **kwargs)
+
+    with patch("asyncio.create_subprocess_exec", side_effect=side_effect):
+        # Patch NamedTemporaryFile to use our tmp_path
+        mock_temp = MagicMock()
+        mock_temp.__enter__.return_value.name = str(host_file)
+
+        with patch("tempfile.NamedTemporaryFile", return_value=mock_temp):
+            result = await sandbox.screenshot("room-1", "http://example.com")
+
+    assert result == fake_png
+    # Verify both calls were made
+    exec_calls = [c for c in mocker.calls if "exec" in c]
+    cp_calls = [c for c in mocker.calls if "cp" in c]
+    assert len(exec_calls) == 1
+    assert len(cp_calls) == 1
+    assert "node" in exec_calls[0]
+    assert "http://example.com" in exec_calls[0]
+
+
+@pytest.mark.asyncio
+async def test_screenshot_failure_node_fails(settings):
+    """screenshot() returns None if node execution fails."""
+    mocker = SubprocessMocker()
+    mocker.on("podman", "exec", returncode=1, stderr=b"Screenshot failed")
+
+    sandbox = SandboxManager(settings)
+    sandbox._containers = {"room-1": "sandbox-room-1"}
+
+    with patch("asyncio.create_subprocess_exec", mocker):
+        result = await sandbox.screenshot("room-1", "http://example.com")
+
+    assert result is None
+    # Verify cp was NOT called
+    cp_calls = [c for c in mocker.calls if "cp" in c]
+    assert len(cp_calls) == 0
+
+
+@pytest.mark.asyncio
+async def test_screenshot_failure_cp_fails(settings, tmp_path):
+    """screenshot() returns None if podman cp fails."""
+    mocker = SubprocessMocker()
+    mocker.on("podman", "exec", returncode=0)
+    mocker.on("podman", "cp", returncode=1, stderr=b"cp failed")
+
+    sandbox = SandboxManager(settings)
+    sandbox._containers = {"room-1": "sandbox-room-1"}
+
+    with patch("asyncio.create_subprocess_exec", mocker):
+        # Even if cp fails, NamedTemporaryFile is called
+        mock_temp = MagicMock()
+        mock_temp.__enter__.return_value.name = str(tmp_path / "should_not_exist.png")
+
+        with patch("tempfile.NamedTemporaryFile", return_value=mock_temp):
+            result = await sandbox.screenshot("room-1", "http://example.com")
+
+    assert result is None
