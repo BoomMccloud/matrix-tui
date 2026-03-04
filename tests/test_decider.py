@@ -102,3 +102,55 @@ async def test_handle_message_early_termination():
         
         # Verify litellm was called exactly once
         assert mock_acompletion.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_handle_message_history_accumulation():
+    """Verify conversation history includes tool calls and results across turns."""
+    settings = MagicMock()
+    settings.max_agent_turns = 5
+    settings.llm_model = "gpt-4"
+    settings.llm_api_key = "fake-key"
+    settings.llm_api_base = None
+
+    sandbox = MagicMock()
+    sandbox.save_state = MagicMock()
+
+    decider = Decider(settings, sandbox)
+
+    # Response 1: Tool Call
+    mock_tool_call = MagicMock()
+    mock_tool_call.id = "call_1"
+    mock_tool_call.function.name = "run_command"
+    mock_tool_call.function.arguments = '{"command": "ls"}'
+
+    resp1 = MagicMock()
+    resp1.choices = [MagicMock()]
+    resp1.choices[0].message.content = "Checking files..."
+    resp1.choices[0].message.tool_calls = [mock_tool_call]
+
+    # Response 2: Final Text
+    resp2 = MagicMock()
+    resp2.choices = [MagicMock()]
+    resp2.choices[0].message.content = "Found files."
+    resp2.choices[0].message.tool_calls = None
+
+    with (
+        patch("matrix_agent.decider.litellm.acompletion", new_callable=AsyncMock) as mock_acompletion,
+        patch("matrix_agent.decider.execute_tool", new_callable=AsyncMock) as mock_execute_tool,
+    ):
+        mock_acompletion.side_effect = [resp1, resp2]
+        mock_execute_tool.return_value = ("file1.py\nfile2.py", None)
+
+        results = []
+        async for res in decider.handle_message("chat-1", "List files"):
+            results.append(res)
+
+        # Second acompletion call should include tool call + tool result in messages
+        assert mock_acompletion.call_count == 2
+        second_call_messages = mock_acompletion.call_args_list[1].kwargs.get(
+            "messages", mock_acompletion.call_args_list[1][1].get("messages", [])
+        )
+        # Should contain: system, user msg, assistant (tool call), tool result
+        tool_roles = [m["role"] for m in second_call_messages if m["role"] == "tool"]
+        assert len(tool_roles) >= 1, "History should include tool result"

@@ -295,8 +295,14 @@ class TaskRunner:
                 f"--body 'Closes #{issue_num}' --head {branch} 2>&1 || "
                 f"gh pr view {branch} --json url -q .url",
             )
-        pr_url = pr_url_out.strip()
-        if not pr_url or not pr_url.startswith("http"):
+        # Extract first URL from output (gh pr create may include extra text)
+        pr_url = None
+        for line in pr_url_out.splitlines():
+            line = line.strip()
+            if line.startswith("http"):
+                pr_url = line
+                break
+        if not pr_url:
             logger.error("[%s] Failed to get PR URL: %s", task_id[:20], pr_url_out)
             return None, f"Failed to create PR: {pr_url_out.strip()}"
 
