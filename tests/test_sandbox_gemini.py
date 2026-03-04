@@ -580,3 +580,48 @@ async def test_create_retry_on_already_in_use(settings):
     rm_calls = [c for c in mocker.calls if c[:3] == ("podman", "rm", "-f")]
     assert len(rm_calls) == 1
     assert rm_calls[0][3] == "sandbox-retry-chat"
+
+
+# ------------------------------------------------------------------ #
+# Group H: get_host_port()
+# ------------------------------------------------------------------ #
+
+
+@pytest.mark.asyncio
+async def test_get_host_port_success(settings):
+    """get_host_port returns the host port from podman port output."""
+    mocker = SubprocessMocker()
+    mocker.on("podman", "port", "sandbox-room-1", "8080", stdout=b"0.0.0.0:12345\n")
+
+    sandbox = _make_sandbox(settings)
+    sandbox._containers = {"room-1": "sandbox-room-1"}
+
+    with patch("asyncio.create_subprocess_exec", mocker):
+        port = await sandbox.get_host_port("room-1", 8080)
+
+    assert port == 12345
+
+
+@pytest.mark.asyncio
+async def test_get_host_port_no_mapping(settings):
+    """get_host_port returns None when podman port fails (no mapping)."""
+    mocker = SubprocessMocker()
+    mocker.on("podman", "port", "sandbox-room-1", "8080", returncode=1, stderr=b"no port")
+
+    sandbox = _make_sandbox(settings)
+    sandbox._containers = {"room-1": "sandbox-room-1"}
+
+    with patch("asyncio.create_subprocess_exec", mocker):
+        port = await sandbox.get_host_port("room-1", 8080)
+
+    assert port is None
+
+
+@pytest.mark.asyncio
+async def test_get_host_port_no_container(settings):
+    """get_host_port returns None when chat_id has no container."""
+    sandbox = _make_sandbox(settings)
+    # sandbox._containers is empty
+
+    port = await sandbox.get_host_port("unknown-room", 8080)
+    assert port is None
