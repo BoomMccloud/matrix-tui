@@ -6,7 +6,7 @@ Real tmp_path for IPC and state files.
 
 import json
 import os
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -580,6 +580,120 @@ async def test_create_retry_on_already_in_use(settings):
     rm_calls = [c for c in mocker.calls if c[:3] == ("podman", "rm", "-f")]
     assert len(rm_calls) == 1
     assert rm_calls[0][3] == "sandbox-retry-chat"
+
+
+# ------------------------------------------------------------------ #
+# Group H: get_host_port()
+# ------------------------------------------------------------------ #
+
+
+@pytest.mark.asyncio
+async def test_get_host_port_success(settings):
+    """get_host_port returns the host port from podman port output."""
+    mocker = SubprocessMocker()
+    mocker.on("podman", "port", "sandbox-room-1", "8080", stdout=b"0.0.0.0:12345\n")
+
+    sandbox = _make_sandbox(settings)
+    sandbox._containers = {"room-1": "sandbox-room-1"}
+
+    with patch("asyncio.create_subprocess_exec", mocker):
+        port = await sandbox.get_host_port("room-1", 8080)
+
+    assert port == 12345
+
+
+@pytest.mark.asyncio
+async def test_get_host_port_no_mapping(settings):
+    """get_host_port returns None when podman port fails (no mapping)."""
+    mocker = SubprocessMocker()
+    mocker.on("podman", "port", "sandbox-room-1", "8080", returncode=1, stderr=b"no port")
+
+    sandbox = _make_sandbox(settings)
+    sandbox._containers = {"room-1": "sandbox-room-1"}
+
+    with patch("asyncio.create_subprocess_exec", mocker):
+        port = await sandbox.get_host_port("room-1", 8080)
+
+    assert port is None
+
+
+@pytest.mark.asyncio
+async def test_get_host_port_no_container(settings):
+    """get_host_port returns None when chat_id has no container."""
+    sandbox = _make_sandbox(settings)
+
+    port = await sandbox.get_host_port("unknown-room", 8080)
+    assert port is None
+
+
+# ------------------------------------------------------------------ #
+# Group I: screenshot()
+# ------------------------------------------------------------------ #
+
+
+@pytest.mark.asyncio
+async def test_screenshot_success(settings, tmp_path):
+    """screenshot() returns bytes on success."""
+    mocker = SubprocessMocker()
+    mocker.on("podman", "exec", returncode=0)
+    mocker.on("podman", "cp", returncode=0)
+
+    sandbox = SandboxManager(settings)
+    sandbox._containers = {"room-1": "sandbox-room-1"}
+
+    fake_png = b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR"
+    host_file = tmp_path / "screenshot_host.png"
+
+    async def side_effect(*args, **kwargs):
+        if len(args) > 1 and args[1] == "cp":
+            dest_path = args[3]
+            with open(dest_path, "wb") as f:
+                f.write(fake_png)
+        return await mocker(*args, **kwargs)
+
+    with patch("asyncio.create_subprocess_exec", side_effect=side_effect):
+        mock_temp = MagicMock()
+        mock_temp.__enter__.return_value.name = str(host_file)
+
+        with patch("tempfile.NamedTemporaryFile", return_value=mock_temp):
+            result = await sandbox.screenshot("room-1", "http://example.com")
+
+    assert result == fake_png
+
+
+@pytest.mark.asyncio
+async def test_screenshot_failure_node_fails(settings):
+    """screenshot() returns None if node execution fails."""
+    mocker = SubprocessMocker()
+    mocker.on("podman", "exec", returncode=1, stderr=b"Screenshot failed")
+
+    sandbox = SandboxManager(settings)
+    sandbox._containers = {"room-1": "sandbox-room-1"}
+
+    with patch("asyncio.create_subprocess_exec", mocker):
+        result = await sandbox.screenshot("room-1", "http://example.com")
+
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_screenshot_failure_cp_fails(settings, tmp_path):
+    """screenshot() returns None if podman cp fails."""
+    mocker = SubprocessMocker()
+    mocker.on("podman", "exec", returncode=0)
+    mocker.on("podman", "cp", returncode=1, stderr=b"cp failed")
+
+    sandbox = SandboxManager(settings)
+    sandbox._containers = {"room-1": "sandbox-room-1"}
+
+    with patch("asyncio.create_subprocess_exec", mocker):
+        mock_temp = MagicMock()
+        mock_temp.__enter__.return_value.name = str(tmp_path / "should_not_exist.png")
+
+        with patch("tempfile.NamedTemporaryFile", return_value=mock_temp):
+            result = await sandbox.screenshot("room-1", "http://example.com")
+
+    assert result is None
 
 
 # ------------------------------------------------------------------ #
