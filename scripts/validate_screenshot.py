@@ -63,7 +63,7 @@ def main():
     )
     if result.returncode != 0:
         print(f"  ✗ Image '{SANDBOX_IMAGE}' not found.")
-        print("  Build it first: podman build -t matrix-agent-sandbox -f Containerfile .")
+        print(f"  Build it first: podman build -t matrix-agent-sandbox -f Containerfile .")
         sys.exit(1)
     print(f"  ✓ Image '{SANDBOX_IMAGE}' found")
 
@@ -142,7 +142,7 @@ def main():
             print(f"  ✓ PNG exists: {HOST_OUTPUT} ({size} bytes)")
             passed += 1
         else:
-            print("  ✗ PNG exists but is empty")
+            print(f"  ✗ PNG exists but is empty")
     else:
         print(f"  ✗ PNG not found at {HOST_OUTPUT}")
 

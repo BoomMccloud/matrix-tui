@@ -14,6 +14,7 @@ dev = ["pytest>=8.0", "pytest-asyncio>=0.24", "ruff>=0.9"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+pythonpath = ["src"]
 
 [build-system]
 requires = ["hatchling"]
