@@ -5,7 +5,7 @@
 INPUT=$(cat)
 
 # --- Shared denylists (single source of truth) ---
-DENIED_NAMES=".gitignore AGENTS.md CLAUDE.md pyproject.toml uv.lock package-lock.json Cargo.lock go.sum Containerfile Makefile"
+DENIED_NAMES=".gitignore AGENTS.md CLAUDE.md pyproject.toml uv.lock package-lock.json Cargo.lock go.sum Containerfile Makefile conftest.py __init__.py"
 DENIED_DIRS=".gemini/ .claude/ .github/ scripts/ src/matrix_agent/templates/"
 
 # Helper: check if a path is forbidden. Sets BLOCKED_REASON on match.

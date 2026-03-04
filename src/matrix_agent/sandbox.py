@@ -54,6 +54,7 @@ FORBIDDEN_NAMES = {
     "pyproject.toml", "uv.lock", "package-lock.json", "Cargo.lock", "go.sum",
     ".gitignore", "CLAUDE.md", "AGENTS.md", "Containerfile", "Makefile",
     "pr-url.txt", "acceptance-criteria.md", "status.md", "GEMINI.md",
+    "conftest.py", "__init__.py",
 }
 FORBIDDEN_PREFIXES = (".gemini/", ".claude/", ".github/", "scripts/", "src/matrix_agent/templates/")
 
