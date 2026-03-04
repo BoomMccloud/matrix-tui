@@ -580,3 +580,41 @@ async def test_create_retry_on_already_in_use(settings):
     rm_calls = [c for c in mocker.calls if c[:3] == ("podman", "rm", "-f")]
     assert len(rm_calls) == 1
     assert rm_calls[0][3] == "sandbox-retry-chat"
+
+
+# ------------------------------------------------------------------ #
+# Group H: create() environment variables
+# ------------------------------------------------------------------ #
+
+
+@pytest.mark.asyncio
+async def test_create_env_var_gemini_model(settings):
+    """create() forwards GEMINI_MODEL if set, omit if empty."""
+    mocker = SubprocessMocker()
+    mocker.on("podman", "run", stdout=b"cid")
+    mocker.on("podman", "exec")
+
+    sandbox = SandboxManager(settings)
+
+    # 1. Case: GEMINI_MODEL is set
+    settings.gemini_model = "gemini-2.0-flash"
+    with patch("asyncio.create_subprocess_exec", mocker), \
+         patch("matrix_agent.sandbox.STATE_PATH", "/dev/null"):
+        await sandbox.create("chat-with-model")
+
+    run_call = next(c for c in mocker.calls if "run" in c)
+    assert "-e" in run_call
+    assert "GEMINI_MODEL=gemini-2.0-flash" in run_call
+
+    # 2. Case: GEMINI_MODEL is empty
+    mocker.calls.clear()
+    settings.gemini_model = ""
+    sandbox._containers.clear()
+    with patch("asyncio.create_subprocess_exec", mocker), \
+         patch("matrix_agent.sandbox.STATE_PATH", "/dev/null"):
+        await sandbox.create("chat-no-model")
+
+    run_call = next(c for c in mocker.calls if "run" in c)
+    # Check that GEMINI_MODEL flag is not present
+    env_args = [run_call[i+1] for i, arg in enumerate(run_call) if arg == "-e"]
+    assert not any(arg.startswith("GEMINI_MODEL=") for arg in env_args)
