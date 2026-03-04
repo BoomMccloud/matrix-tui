@@ -198,6 +198,8 @@ class TaskRunner:
             else:
                 # Final failure
                 failure_text = "\n".join(f"- {f}" for f in failures)
+                if not pr_url:
+                    failure_text += "\n- No PR URL found"
                 await channel.deliver_error(
                     task_id,
                     f"Failed after {max_retries + 1} attempts. Issues:\n{failure_text}",
