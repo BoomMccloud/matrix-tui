@@ -583,7 +583,7 @@ async def test_create_retry_on_already_in_use(settings):
 
 
 # ------------------------------------------------------------------ #
-# Group H: screenshot()
+# Group H: screenshot() - unit tests for node script and podman cp
 # ------------------------------------------------------------------ #
 
 
