@@ -449,3 +449,67 @@ async def test_recover_tasks_skips_when_no_repo():
 
     results = await channel.recover_tasks()
     assert results == []
+
+
+@pytest.mark.asyncio
+async def test_github_channel_is_valid_open_with_label(github_channel):
+    """is_valid() returns True for an open issue with the agent-task label."""
+    gh_output = json.dumps({
+        "state": "OPEN",
+        "labels": [{"name": "agent-task"}]
+    }).encode()
+
+    mock_proc = MagicMock()
+    mock_proc.returncode = 0
+    mock_proc.communicate = AsyncMock(return_value=(gh_output, b""))
+
+    with patch(
+        "matrix_agent.channels.asyncio.create_subprocess_exec", return_value=mock_proc
+    ) as mock_exec:
+        valid = await github_channel.is_valid("gh-123")
+
+    assert valid is True
+    mock_exec.assert_called_once_with(
+        "gh", "issue", "view", "123", "--json", "state,labels",
+        stdout=-1, stderr=-1
+    )
+
+
+@pytest.mark.asyncio
+async def test_github_channel_is_valid_closed(github_channel):
+    """is_valid() returns False for a closed issue."""
+    gh_output = json.dumps({
+        "state": "CLOSED",
+        "labels": [{"name": "agent-task"}]
+    }).encode()
+
+    mock_proc = MagicMock()
+    mock_proc.returncode = 0
+    mock_proc.communicate = AsyncMock(return_value=(gh_output, b""))
+
+    with patch(
+        "matrix_agent.channels.asyncio.create_subprocess_exec", return_value=mock_proc
+    ):
+        valid = await github_channel.is_valid("gh-123")
+
+    assert valid is False
+
+
+@pytest.mark.asyncio
+async def test_github_channel_is_valid_no_label(github_channel):
+    """is_valid() returns False for an open issue without the agent-task label."""
+    gh_output = json.dumps({
+        "state": "OPEN",
+        "labels": [{"name": "bug"}]
+    }).encode()
+
+    mock_proc = MagicMock()
+    mock_proc.returncode = 0
+    mock_proc.communicate = AsyncMock(return_value=(gh_output, b""))
+
+    with patch(
+        "matrix_agent.channels.asyncio.create_subprocess_exec", return_value=mock_proc
+    ):
+        valid = await github_channel.is_valid("gh-123")
+
+    assert valid is False
