@@ -501,6 +501,49 @@ async def test_state_round_trip(settings, tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_load_state_prunes_stale_containers(settings, tmp_path):
+    """load_state() removes containers that are not 'running'."""
+    state_path = str(tmp_path / "state.json")
+
+    state = {
+        "containers": {
+            "chat-live": "sandbox-live",
+            "chat-stale": "sandbox-stale"
+        },
+        "history": {
+            "chat-live": [{"role": "user", "content": "live"}],
+            "chat-stale": [{"role": "user", "content": "stale"}]
+        }
+    }
+    with open(state_path, "w") as f:
+        json.dump(state, f)
+
+    sandbox = _make_sandbox(settings)
+
+    mocker = SubprocessMocker()
+    # Mock inspect for live container
+    mocker.on(
+        "podman", "inspect", "--format", "{{.State.Status}}", "sandbox-live",
+        stdout=b"running\n"
+    )
+    # Mock inspect for stale container
+    mocker.on(
+        "podman", "inspect", "--format", "{{.State.Status}}", "sandbox-stale",
+        stdout=b"exited\n"
+    )
+
+    with patch("asyncio.create_subprocess_exec", mocker), \
+         patch("matrix_agent.sandbox.STATE_PATH", state_path):
+        histories = await sandbox.load_state()
+
+    assert sandbox._containers == {"chat-live": "sandbox-live"}
+    assert "chat-stale" not in sandbox._containers
+    assert "chat-live" in histories
+    assert "chat-stale" not in histories
+    assert histories["chat-live"][0]["content"] == "live"
+
+
+@pytest.mark.asyncio
 async def test_container_create_and_destroy(settings):
     """Container create + destroy lifecycle via subprocess."""
     mocker = SubprocessMocker()
