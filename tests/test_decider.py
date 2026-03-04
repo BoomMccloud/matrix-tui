@@ -1,3 +1,4 @@
+"""Unit tests for Decider.handle_message() max_turns limit."""
 from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from matrix_agent.decider import Decider
@@ -43,6 +44,7 @@ async def test_handle_message_max_turns():
 
         # Verify the generator yields exactly once with status "max_turns"
         # Since execute_tool returns no image, only the final max_turns yield occurs.
+        # This confirms that the loop terminates correctly.
         assert len(results) == 1
         text, image, status = results[0]
         assert status == "max_turns"
