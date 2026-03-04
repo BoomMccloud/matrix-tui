@@ -1,8 +1,13 @@
 """Shared test infrastructure — mock only external boundaries."""
 
+import os
+import sys
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+
+# Add src to sys.path to ensure matrix_agent is importable
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../src")))
 
 from matrix_agent.channels import ChannelAdapter
 from matrix_agent.config import Settings
