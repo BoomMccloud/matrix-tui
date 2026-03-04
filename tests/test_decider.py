@@ -60,3 +60,45 @@ async def test_handle_message_max_turns():
         
         # Verify execute_tool was called for each tool call in each turn
         assert mock_execute_tool.call_count == settings.max_agent_turns
+
+@pytest.mark.asyncio
+async def test_handle_message_early_termination():
+    # Create a Decider with a mock SandboxManager and Settings
+    settings = MagicMock()
+    settings.max_agent_turns = 3
+    settings.llm_model = "gpt-4"
+    settings.llm_api_key = "fake-key"
+    settings.llm_api_base = None
+
+    sandbox = MagicMock()
+    sandbox.save_state = MagicMock()
+    
+    decider = Decider(settings, sandbox)
+
+    # Mock litellm.acompletion to return a text response with no tool calls
+    mock_response = MagicMock()
+    mock_response.choices = [MagicMock()]
+    mock_response.choices[0].message.content = "Here is your answer."
+    mock_response.choices[0].message.tool_calls = None
+
+    with patch("matrix_agent.decider.litellm.acompletion", new_callable=AsyncMock) as mock_acompletion:
+        mock_acompletion.return_value = mock_response
+
+        # Call handle_message() and collect yielded results
+        results = []
+        async for res in decider.handle_message("chat-1", "Hello"):
+            results.append(res)
+
+        # Verify the generator yields exactly once with status "completed"
+        assert len(results) == 1
+        text, image, status = results[0]
+        assert status == "completed"
+        assert "Here is your answer." in text
+        assert "Turns: 1/3" in text
+        assert image is None
+
+        # Verify save_state() is called
+        sandbox.save_state.assert_called_once()
+        
+        # Verify litellm was called exactly once
+        assert mock_acompletion.call_count == 1
