@@ -144,6 +144,15 @@ class TaskRunner:
             await channel.deliver_error(task_id, f"Clone failed: {clone_err}")
             return
 
+        # Create feature branch upfront (new issues only — CI fixes already have a branch)
+        if not is_ci_fix:
+            issue_num = task_id.replace("gh-", "").split("-")[0]
+            branch_name = f"agent/issue-{issue_num}"
+            await self.sandbox.exec(
+                task_id,
+                f"cd {repo_path} && git checkout -b {branch_name}",
+            )
+
         # Build prompt
         if is_ci_fix:
             prompt = f"/fix-ci {message}"
@@ -169,12 +178,14 @@ class TaskRunner:
                 return
 
             # Host-controlled push: strip forbidden files, push, create PR
-            pr_url = await self._host_push(
+            pr_url, push_error = await self._host_push(
                 task_id, repo_path, repo_full, is_ci_fix,
             )
 
             # Validate (tests, scope, acceptance criteria)
             passed, failures = await self.sandbox.validate_work(task_id, repo_name)
+            if push_error:
+                failures.append(push_error)
 
             if passed and pr_url:
                 logger.info("[%s] GitHub pipeline succeeded: %s", task_id[:20], pr_url)
@@ -184,8 +195,6 @@ class TaskRunner:
             if attempt < max_retries:
                 # Re-launch with feedback
                 failure_text = "\n".join(f"- {f}" for f in failures)
-                if not pr_url:
-                    failure_text += "\n- No PR URL found"
                 prompt = (
                     f"Host validation failed after your previous attempt:\n"
                     f"{failure_text}\n\n"
@@ -198,8 +207,6 @@ class TaskRunner:
             else:
                 # Final failure
                 failure_text = "\n".join(f"- {f}" for f in failures)
-                if not pr_url:
-                    failure_text += "\n- No PR URL found"
                 await channel.deliver_error(
                     task_id,
                     f"Failed after {max_retries + 1} attempts. Issues:\n{failure_text}",
@@ -208,10 +215,10 @@ class TaskRunner:
 
     async def _host_push(
         self, task_id: str, repo_path: str, repo_full: str, is_ci_fix: bool,
-    ) -> str | None:
+    ) -> tuple[str | None, str | None]:
         """Host-controlled push: strip forbidden files, push branch, create PR.
 
-        Returns the PR URL on success, or None if no branch/commit found.
+        Returns (pr_url, error_reason). error_reason is None on success.
         """
         # 1. Detect branch
         rc, branch_out, _ = await self.sandbox.exec(
@@ -220,7 +227,11 @@ class TaskRunner:
         branch = branch_out.strip()
         if not branch or branch in ("main", "master"):
             logger.warning("[%s] No feature branch found (on %s)", task_id[:20], branch)
-            return None
+            return None, (
+                "No feature branch created. You must run: "
+                "git checkout -b agent/<slug> before committing. "
+                "Do NOT commit on main."
+            )
 
         # 2. Check for forbidden files in the diff
         rc, stdout, _ = await self.sandbox.exec(
@@ -254,7 +265,7 @@ class TaskRunner:
         rc, _, push_err = await self.sandbox.exec(task_id, push_cmd)
         if rc != 0:
             logger.error("[%s] Push failed: %s", task_id[:20], push_err)
-            return None
+            return None, f"git push failed: {push_err.strip()}"
 
         # 5. Create PR (or get existing PR URL for CI fixes)
         if is_ci_fix:
@@ -274,12 +285,12 @@ class TaskRunner:
         pr_url = pr_url_out.strip()
         if not pr_url or not pr_url.startswith("http"):
             logger.error("[%s] Failed to get PR URL: %s", task_id[:20], pr_url_out)
-            return None
+            return None, f"Failed to create PR: {pr_url_out.strip()}"
 
         # 6. Write PR URL to IPC
         self.sandbox.write_ipc_file(task_id, "pr-url.txt", pr_url)
         logger.info("[%s] Host pushed %s and created PR: %s", task_id[:20], branch, pr_url)
-        return pr_url
+        return pr_url, None
 
     async def reconcile(self) -> None:
         """Destroy containers for tasks that are no longer valid."""

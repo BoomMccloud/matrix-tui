@@ -292,6 +292,8 @@ async def test_process_github_retry_prompt_includes_failure_reasons(settings):
             return (0, "fix.py\n", "")
         if "git clone" in cmd or "test -d" in cmd:
             return (0, "", "")
+        if "git checkout -b" in cmd:
+            return (0, "", "")
         if "git rev-parse --abbrev-ref HEAD" in cmd:
             return (0, "agent/fix-15\n", "")
         if "git push" in cmd:
@@ -539,9 +541,10 @@ async def test_host_push_strips_forbidden_files(settings):
     sandbox._containers = {"gh-30": "sandbox-gh-30"}
 
     with patch("asyncio.create_subprocess_exec", mocker):
-        pr_url = await runner._host_push("gh-30", "/workspace/repo", "owner/repo", False)
+        pr_url, error = await runner._host_push("gh-30", "/workspace/repo", "owner/repo", False)
 
     assert pr_url == "https://github.com/owner/repo/pull/30"
+    assert error is None
     # Should have called git checkout to strip forbidden files
     strip_cmds = [c for c in exec_cmds if "git checkout" in c and "pyproject.toml" in c]
     assert len(strip_cmds) >= 1
@@ -575,9 +578,10 @@ async def test_host_push_ci_fix_uses_force_push(settings):
     sandbox._containers = {"gh-31": "sandbox-gh-31"}
 
     with patch("asyncio.create_subprocess_exec", mocker):
-        pr_url = await runner._host_push("gh-31", "/workspace/repo", "owner/repo", True)
+        pr_url, error = await runner._host_push("gh-31", "/workspace/repo", "owner/repo", True)
 
     assert pr_url == "https://github.com/owner/repo/pull/31"
+    assert error is None
     push_cmds = [c for c in exec_cmds if "git push" in c]
     assert len(push_cmds) == 1
     assert "--force" in push_cmds[0]
@@ -599,9 +603,10 @@ async def test_host_push_no_branch_returns_none(settings):
     sandbox._containers = {"gh-32": "sandbox-gh-32"}
 
     with patch("asyncio.create_subprocess_exec", mocker):
-        pr_url = await runner._host_push("gh-32", "/workspace/repo", "owner/repo", False)
+        pr_url, error = await runner._host_push("gh-32", "/workspace/repo", "owner/repo", False)
 
     assert pr_url is None
+    assert "branch" in error.lower()
 
 
 # ------------------------------------------------------------------ #

@@ -21,8 +21,8 @@ IMPORTANT: All IPC files (pr-url.txt, acceptance-criteria.md, changed-files.txt,
    - NEVER modify: pyproject.toml, uv.lock, package-lock.json, Cargo.lock, go.sum, or any lock/manifest file unless the issue specifically requires it.
    - NEVER modify files under `.gemini/`, `templates/`, or `/workspace/.ipc/` in the repo.
 10. If review finds issues, fix and re-test.
-11. **Create branch and commit**:
-    - Create a branch: `git checkout -b agent/<slug>`
+11. **Commit your changes**:
+    - A feature branch has already been created for you. Do NOT create another branch.
     - Stage ONLY the files you intentionally changed: `git add <file1> <file2> ...` (NEVER use `git add -A` or `git add .`)
     - Commit: `git commit -m "<title>"`
     - DO NOT push. DO NOT run `gh pr create`. The host handles pushing and PR creation after validation.
