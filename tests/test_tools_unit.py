@@ -867,3 +867,19 @@ class TestSelfUpdate:
         mock_exec.assert_any_call("git", "checkout", "feature-x", stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT, cwd="/home/matrix-tui")
         # Clean up coroutine to avoid RuntimeWarning
         mock_create_task.call_args[0][0].close()
+
+    @patch("matrix_agent.tools.asyncio.create_subprocess_exec")
+    @patch("matrix_agent.tools.asyncio.sleep")
+    async def test_delayed_restart(self, mock_sleep, mock_exec):
+        """_delayed_restart: waits and then restarts service."""
+        from matrix_agent.tools import _delayed_restart
+        
+        mock_proc = AsyncMock()
+        mock_proc.wait = AsyncMock()
+        mock_exec.return_value = mock_proc
+        
+        await _delayed_restart()
+        
+        mock_sleep.assert_called_once_with(2)
+        mock_exec.assert_called_once_with("systemctl", "restart", "matrix-agent")
+        mock_proc.wait.assert_called_once()
