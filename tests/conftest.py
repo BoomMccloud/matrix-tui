@@ -1,7 +1,6 @@
 """Shared test infrastructure — mock only external boundaries."""
 
 import sys
-import os
 from pathlib import Path
 
 # Add 'src' to sys.path to ensure matrix_agent is importable
