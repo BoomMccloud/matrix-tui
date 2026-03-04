@@ -6,6 +6,7 @@ from matrix_agent.tools import (
     _shell_quote,
     execute_tool,
     _create_pull_request,
+    _is_git_push_blocked,
 )
 
 
@@ -48,6 +49,36 @@ class TestShellQuote:
         assert _shell_quote("a < b") == "'a < b'"
         assert _shell_quote("a * b") == "'a * b'"
         assert _shell_quote("a ? b") == "'a ? b'"
+
+
+# ------------------------------------------------------------------ #
+# _is_git_push_blocked tests
+# ------------------------------------------------------------------ #
+
+
+class TestIsGitPushBlocked:
+    """Tests for _is_git_push_blocked function."""
+
+    def test_block_git_push(self):
+        """Standard git push should be blocked."""
+        assert _is_git_push_blocked("git push") is True
+        assert _is_git_push_blocked("git push origin main") is True
+
+    def test_allow_force(self):
+        """git push --force should be allowed."""
+        assert _is_git_push_blocked("git push --force") is False
+        assert _is_git_push_blocked("git push origin main --force") is False
+
+    def test_allow_force_with_lease(self):
+        """git push --force-with-lease should be allowed."""
+        assert _is_git_push_blocked("git push --force-with-lease") is False
+        assert _is_git_push_blocked("git push --force-with-lease origin feat-branch") is False
+
+    def test_allow_other_commands(self):
+        """Other commands should not be blocked."""
+        assert _is_git_push_blocked("git status") is False
+        assert _is_git_push_blocked("git pull") is False
+        assert _is_git_push_blocked("ls -la") is False
 
 
 # ------------------------------------------------------------------ #
