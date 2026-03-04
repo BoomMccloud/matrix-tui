@@ -4,6 +4,7 @@ version = "0.1.0"
 requires-python = ">=3.12"
 dependencies = [
     "matrix-nio>=0.24",
+    "aiohttp>=3.9",
     "aiofiles>=24.0",
     "litellm>=1.0",
     "pydantic-settings>=2.0",
@@ -14,6 +15,7 @@ dev = ["pytest>=8.0", "pytest-asyncio>=0.24", "ruff>=0.9"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+pythonpath = ["src"]
 
 [build-system]
 requires = ["hatchling"]
