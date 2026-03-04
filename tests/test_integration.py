@@ -70,6 +70,7 @@ def settings():
         llm_api_key=os.environ.get("LLM_API_KEY", ""),
         llm_model=os.environ.get("LLM_MODEL", "openrouter/anthropic/claude-haiku-4-5"),
         llm_api_base=os.environ.get("LLM_API_BASE", ""),
+        gemini_model=os.environ.get("GEMINI_MODEL", "gemini-3-flash-preview"),
         max_agent_turns=10,
     )
 

@@ -8,7 +8,6 @@ import asyncio
 from abc import ABC, abstractmethod
 
 from aiohttp import web
-from .decider import GITHUB_SYSTEM_PROMPT
 
 log = logging.getLogger(__name__)
 
@@ -40,7 +39,7 @@ class ChannelAdapter(ABC):
 
 
 class GitHubChannel(ChannelAdapter):
-    system_prompt = GITHUB_SYSTEM_PROMPT
+    system_prompt = ""  # GitHub path bypasses Decider; system_prompt unused
 
     def __init__(self, task_runner, settings):
         self.task_runner = task_runner
@@ -220,9 +219,9 @@ class GitHubChannel(ChannelAdapter):
 
             repo_full_name = payload.get("repository", {}).get("full_name", "")
 
-            # For reopened issues, check for CI failure context BEFORE enqueuing
-            ci_context = None
-            if action == "reopened" and repo_full_name:
+            # Fetch comments once for both CI context check and backfill
+            all_comment_bodies: list[str] = []
+            if repo_full_name:
                 proc = await asyncio.create_subprocess_exec(
                     "gh", "api", f"repos/{repo_full_name}/issues/{issue['number']}/comments",
                     "--jq", "[.[] | .body]",
@@ -231,13 +230,16 @@ class GitHubChannel(ChannelAdapter):
                 stdout, _ = await proc.communicate()
                 if proc.returncode == 0 and stdout:
                     try:
-                        bodies = json.loads(stdout.decode())
+                        all_comment_bodies = json.loads(stdout.decode())
                     except (ValueError, TypeError):
-                        bodies = []
-                    # Look for CI failure comments (⚠️ prefix from ci-feedback.yml)
-                    ci_comments = [b for b in bodies if b.strip().startswith("\u26a0\ufe0f")]
-                    if ci_comments:
-                        ci_context = ci_comments[-1]  # most recent CI failure
+                        all_comment_bodies = []
+
+            # For reopened issues, check for CI failure context
+            ci_context = None
+            if action == "reopened" and all_comment_bodies:
+                ci_comments = [b for b in all_comment_bodies if b.strip().startswith("\u26a0\ufe0f")]
+                if ci_comments:
+                    ci_context = ci_comments[-1]  # most recent CI failure
 
             # Build and enqueue the message
             if ci_context:
@@ -248,26 +250,15 @@ class GitHubChannel(ChannelAdapter):
                 message = f"Repository: {repo_full_name}\n\n# {issue['title']}\n\n{issue.get('body', '')}"
                 await self.task_runner.enqueue(task_id, message, self)
 
-                # Backfill existing comments as bundled context
-                if repo_full_name:
-                    proc = await asyncio.create_subprocess_exec(
-                        "gh", "api", f"repos/{repo_full_name}/issues/{issue['number']}/comments",
-                        "--jq", "[.[] | .body]",
-                        stdout=asyncio.subprocess.PIPE,
-                    )
-                    stdout, _ = await proc.communicate()
-                    if proc.returncode == 0 and stdout:
-                        try:
-                            bodies = json.loads(stdout.decode())
-                        except (ValueError, TypeError):
-                            bodies = []
-                        comments = [
-                            b for b in bodies
-                            if b.strip() and not b.strip().startswith(("\U0001f916", "\u2705", "\u274c"))
-                        ]
-                        if comments:
-                            context = "Previous comments on this issue:\n\n" + "\n---\n".join(comments)
-                            await self.task_runner.enqueue(task_id, context, self)
+                # Backfill existing comments (reuse already-fetched data)
+                if all_comment_bodies:
+                    comments = [
+                        b for b in all_comment_bodies
+                        if b.strip() and not b.strip().startswith(("\U0001f916", "\u2705", "\u274c"))
+                    ]
+                    if comments:
+                        context = "Previous comments on this issue:\n\n" + "\n---\n".join(comments)
+                        await self.task_runner.enqueue(task_id, context, self)
 
         elif event_type == "issue_comment" and action == "created":
             issue = payload["issue"]
