@@ -583,7 +583,7 @@ async def test_create_retry_on_already_in_use(settings):
 
 
 # ------------------------------------------------------------------ #
-# Group H: get_host_port()
+# Group H: get_host_port() - Tests SandboxManager.get_host_port()
 # ------------------------------------------------------------------ #
 
 
