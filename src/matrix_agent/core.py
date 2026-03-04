@@ -161,6 +161,7 @@ class TaskRunner:
 
         # Run Gemini with retries
         max_retries = 2
+        best_pr_url = None  # Track PR URL across attempts
         for attempt in range(max_retries + 1):
             rc, stdout, _ = await self.sandbox.run_gemini_session(
                 task_id, prompt, send_update, repo_name,
@@ -181,6 +182,8 @@ class TaskRunner:
             pr_url, push_error = await self._host_push(
                 task_id, repo_path, repo_full, is_ci_fix,
             )
+            if pr_url:
+                best_pr_url = pr_url
 
             # Validate (tests, scope, acceptance criteria)
             passed, failures = await self.sandbox.validate_work(task_id, repo_name)
@@ -205,12 +208,22 @@ class TaskRunner:
                                task_id[:20], attempt + 1, max_retries + 1,
                                "; ".join(failures))
             else:
-                # Final failure
-                failure_text = "\n".join(f"- {f}" for f in failures)
-                await channel.deliver_error(
-                    task_id,
-                    f"Failed after {max_retries + 1} attempts. Issues:\n{failure_text}",
-                )
+                # Final failure — but check if a PR was created in an earlier attempt
+                if best_pr_url:
+                    logger.warning("[%s] Validation failed but PR exists: %s",
+                                   task_id[:20], best_pr_url)
+                    failure_text = "\n".join(f"- {f}" for f in failures)
+                    await channel.deliver_result(
+                        task_id,
+                        f"PR created but validation has issues: {best_pr_url}\n\n"
+                        f"Issues:\n{failure_text}",
+                    )
+                else:
+                    failure_text = "\n".join(f"- {f}" for f in failures)
+                    await channel.deliver_error(
+                        task_id,
+                        f"Failed after {max_retries + 1} attempts. Issues:\n{failure_text}",
+                    )
                 return
 
     async def _host_push(
