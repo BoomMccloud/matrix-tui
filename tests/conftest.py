@@ -1,5 +1,12 @@
 """Shared test infrastructure — mock only external boundaries."""
 
+import sys
+import os
+from pathlib import Path
+
+# Add 'src' to sys.path to ensure matrix_agent is importable
+sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
+
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
