@@ -4,7 +4,7 @@ import asyncio
 import logging
 import re
 import time
-from .sandbox import SandboxManager
+from .sandbox import SandboxManager, check_forbidden
 from .decider import Decider
 from .channels import ChannelAdapter
 
@@ -69,7 +69,7 @@ class TaskRunner:
         t0 = time.monotonic()
 
         # Ensure container exists
-        if task_id not in self.sandbox._containers:
+        if not self.sandbox.has_container(task_id):
             logger.info("[%s] Creating container...", task_id[:20])
             await self.sandbox.create(task_id)
             logger.info("[%s] Container ready", task_id[:20])
@@ -120,7 +120,7 @@ class TaskRunner:
             await channel.deliver_result(task_id, final_text, status=final_status)
 
     async def _process_github(self, task_id: str, message: str, channel: ChannelAdapter, send_update) -> None:
-        """Single Gemini CLI session for GitHub issues."""
+        """Gemini CLI session for GitHub issues. Host controls push and PR creation."""
         # Parse repo from message
         is_ci_fix = message.startswith("CI_FIX:")
         repo_match = re.search(r"Repository:\s*(\S+)", message)
@@ -131,13 +131,14 @@ class TaskRunner:
 
         repo_full = repo_match.group(1)  # e.g. "owner/repo"
         repo_name = repo_full.split("/")[-1]  # e.g. "repo"
+        repo_path = f"/workspace/{repo_name}"
         mode = "CI fix" if is_ci_fix else "new issue"
         logger.info("[%s] GitHub pipeline: %s for %s", task_id[:20], mode, repo_full)
 
         # Clone repo (idempotent — skip if dir exists)
         clone_rc, _, clone_err = await self.sandbox.exec(
             task_id,
-            f"test -d /workspace/{repo_name}/.git || git clone https://github.com/{repo_full} /workspace/{repo_name}",
+            f"test -d {repo_path}/.git || git clone https://github.com/{repo_full} {repo_path}",
         )
         if clone_rc != 0:
             await channel.deliver_error(task_id, f"Clone failed: {clone_err}")
@@ -152,7 +153,7 @@ class TaskRunner:
         # Run Gemini with retries
         max_retries = 2
         for attempt in range(max_retries + 1):
-            rc, stdout, pr_url = await self.sandbox.run_gemini_session(
+            rc, stdout, _ = await self.sandbox.run_gemini_session(
                 task_id, prompt, send_update, repo_name,
             )
 
@@ -167,7 +168,12 @@ class TaskRunner:
                 )
                 return
 
-            # Validate
+            # Host-controlled push: strip forbidden files, push, create PR
+            pr_url = await self._host_push(
+                task_id, repo_path, repo_full, is_ci_fix,
+            )
+
+            # Validate (tests, scope, acceptance criteria)
             passed, failures = await self.sandbox.validate_work(task_id, repo_name)
 
             if passed and pr_url:
@@ -183,7 +189,7 @@ class TaskRunner:
                 prompt = (
                     f"Host validation failed after your previous attempt:\n"
                     f"{failure_text}\n\n"
-                    f"Fix these issues, then create the PR.\n\n"
+                    f"Fix these issues, then commit your changes.\n\n"
                     f"Original issue:\n{message}"
                 )
                 logger.warning("[%s] Validation failed (attempt %d/%d): %s",
@@ -197,6 +203,81 @@ class TaskRunner:
                     f"Failed after {max_retries + 1} attempts. Issues:\n{failure_text}",
                 )
                 return
+
+    async def _host_push(
+        self, task_id: str, repo_path: str, repo_full: str, is_ci_fix: bool,
+    ) -> str | None:
+        """Host-controlled push: strip forbidden files, push branch, create PR.
+
+        Returns the PR URL on success, or None if no branch/commit found.
+        """
+        # 1. Detect branch
+        rc, branch_out, _ = await self.sandbox.exec(
+            task_id, f"cd {repo_path} && git rev-parse --abbrev-ref HEAD",
+        )
+        branch = branch_out.strip()
+        if not branch or branch in ("main", "master"):
+            logger.warning("[%s] No feature branch found (on %s)", task_id[:20], branch)
+            return None
+
+        # 2. Check for forbidden files in the diff
+        rc, stdout, _ = await self.sandbox.exec(
+            task_id,
+            f"cd {repo_path} && "
+            "base=$(git merge-base HEAD origin/main 2>/dev/null || "
+            "git merge-base HEAD origin/master 2>/dev/null || echo HEAD~1) && "
+            "git diff --name-only $base HEAD",
+        )
+        changed = [f.strip() for f in stdout.splitlines() if f.strip()]
+        forbidden = check_forbidden(changed)
+
+        # 3. Strip forbidden files from commit if any
+        if forbidden:
+            logger.warning("[%s] Stripping forbidden files from commit: %s",
+                           task_id[:20], ", ".join(forbidden))
+            escaped = " ".join(f"'{f}'" for f in forbidden)
+            await self.sandbox.exec(
+                task_id,
+                f"cd {repo_path} && "
+                f"git checkout origin/main -- {escaped} 2>/dev/null || "
+                f"git checkout origin/master -- {escaped} && "
+                f"git commit --amend --no-edit",
+            )
+
+        # 4. Push
+        if is_ci_fix:
+            push_cmd = f"cd {repo_path} && git push --force origin {branch}"
+        else:
+            push_cmd = f"cd {repo_path} && git push -u origin {branch}"
+        rc, _, push_err = await self.sandbox.exec(task_id, push_cmd)
+        if rc != 0:
+            logger.error("[%s] Push failed: %s", task_id[:20], push_err)
+            return None
+
+        # 5. Create PR (or get existing PR URL for CI fixes)
+        if is_ci_fix:
+            rc, pr_url_out, _ = await self.sandbox.exec(
+                task_id,
+                f"cd {repo_path} && gh pr view {branch} --json url -q .url",
+            )
+        else:
+            issue_num = task_id.replace("gh-", "").split("-")[0]
+            rc, pr_url_out, _ = await self.sandbox.exec(
+                task_id,
+                f"cd {repo_path} && "
+                f"gh pr create --title 'Fix #{issue_num}' "
+                f"--body 'Closes #{issue_num}' --head {branch} 2>&1 || "
+                f"gh pr view {branch} --json url -q .url",
+            )
+        pr_url = pr_url_out.strip()
+        if not pr_url or not pr_url.startswith("http"):
+            logger.error("[%s] Failed to get PR URL: %s", task_id[:20], pr_url_out)
+            return None
+
+        # 6. Write PR URL to IPC
+        self.sandbox.write_ipc_file(task_id, "pr-url.txt", pr_url)
+        logger.info("[%s] Host pushed %s and created PR: %s", task_id[:20], branch, pr_url)
+        return pr_url
 
     async def reconcile(self) -> None:
         """Destroy containers for tasks that are no longer valid."""
@@ -214,7 +295,7 @@ class TaskRunner:
         self._queues.pop(task_id, None)
         self._channels.pop(task_id, None)
         self._processing.discard(task_id)
-        if task_id in self.sandbox._containers:
+        if self.sandbox.has_container(task_id):
             await self.sandbox.destroy(task_id)
 
     async def reconcile_loop(self) -> None:
@@ -228,7 +309,7 @@ class TaskRunner:
 
     async def destroy_orphans(self) -> None:
         """On startup, destroy containers with no active worker (crash recovery)."""
-        for chat_id in list(self.sandbox._containers):
+        for chat_id in self.sandbox.container_ids():
             if chat_id not in self._processing:
                 logger.info("Destroying orphan container: %s", chat_id)
                 await self.sandbox.destroy(chat_id)

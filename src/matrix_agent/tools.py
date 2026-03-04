@@ -9,6 +9,16 @@ from .sandbox import SandboxManager
 
 log = logging.getLogger(__name__)
 
+_MAX_OUTPUT = 10000
+
+
+def _truncate(text: str) -> str:
+    """Truncate long output to _MAX_OUTPUT chars."""
+    if len(text) > _MAX_OUTPUT:
+        return text[:_MAX_OUTPUT] + "\n... (truncated)"
+    return text
+
+
 TOOL_SCHEMAS = [
     {
         "type": "function",
@@ -230,10 +240,7 @@ async def execute_tool(
             output += f"\nSTDERR:\n{stderr}"
         if rc != 0:
             output += f"\n[exit code: {rc}]"
-        # Truncate very long output
-        if len(output) > 10000:
-            output = output[:10000] + "\n... (truncated)"
-        return output, None
+        return _truncate(output), None
 
     if name == "write_file":
         result = await sandbox.write_file(chat_id, args["path"], args["content"])
@@ -241,9 +248,7 @@ async def execute_tool(
 
     if name == "read_file":
         result = await sandbox.read_file(chat_id, args["path"])
-        if len(result) > 10000:
-            result = result[:10000] + "\n... (truncated)"
-        return result, None
+        return _truncate(result), None
 
     if name in ("plan", "implement", "review"):
         cli = "qwen" if name == "implement" else "gemini"
@@ -257,9 +262,7 @@ async def execute_tool(
             output += f"\nSTDERR:\n{stderr}"
         if rc != 0:
             output += f"\n[exit code: {rc}]"
-        if len(output) > 10000:
-            output = output[:10000] + "\n... (truncated)"
-        return output, None
+        return _truncate(output), None
 
     if name == "run_tests":
         path = args.get("path", "/workspace")
@@ -285,9 +288,7 @@ async def execute_tool(
 
         status = "PASS" if lint_rc == 0 and test_rc == 0 else "FAIL"
         output = f"[{status}]\n\n=== Lint (ruff) ===\n{lint_result}\n\n=== Tests (pytest) ===\n{test_result}"
-        if len(output) > 10000:
-            output = output[:10000] + "\n... (truncated)"
-        return output, None
+        return _truncate(output), None
 
     if name == "self_update":
         branch = args.get("branch") if args else None

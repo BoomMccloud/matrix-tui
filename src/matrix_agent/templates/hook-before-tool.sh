@@ -1,5 +1,5 @@
 #!/bin/sh
-# BeforeTool hook — blocks bare git push (must use --force for CI fix flow).
+# BeforeTool hook — blocks git push (host handles pushing after validation).
 # Exit code 2 = Gemini CLI blocks the tool execution.
 # Reads JSON from stdin with tool invocation details.
 INPUT=$(cat)
@@ -32,9 +32,9 @@ check_path() {
 COMMAND=$(echo "$INPUT" | grep -o '"command"[[:space:]]*:[[:space:]]*"[^"]*"' | head -1)
 TOOL_NAME=$(echo "$INPUT" | grep -o '"tool_name"[[:space:]]*:[[:space:]]*"[^"]*"' | head -1 | sed 's/.*"tool_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/')
 
-# --- Guard: git push without --force ---
-if echo "$COMMAND" | grep -q 'git push' && ! echo "$COMMAND" | grep -q '\-\-force'; then
-  echo '{"error": "git push without --force is blocked. Use create-pr workflow or --force for CI fixes."}'
+# --- Guard: block ALL git push (host handles pushing after validation) ---
+if echo "$COMMAND" | grep -q 'git push'; then
+  echo '{"error": "git push is blocked. The host handles pushing after validation."}'
   exit 2
 fi
 
@@ -42,6 +42,16 @@ fi
 if echo "$COMMAND" | grep -q 'git add -A\|git add \.\|git add --all'; then
   echo '{"error": "git add -A / git add . is blocked. Stage specific files by name: git add <file1> <file2> ..."}'
   exit 2
+fi
+
+# --- Guard: git add of forbidden files ---
+if echo "$COMMAND" | grep -q 'git add'; then
+  for F in $DENIED_NAMES; do
+    if echo "$COMMAND" | grep -q "[/ ]${F}"; then
+      echo "{\"error\": \"Staging $F is blocked: protected config file.\"}"
+      exit 2
+    fi
+  done
 fi
 
 # --- Guard: block writes to forbidden files via write_file/replace tools ---

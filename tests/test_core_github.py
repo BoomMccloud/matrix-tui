@@ -12,7 +12,7 @@ import pytest
 
 from matrix_agent.core import TaskRunner
 from matrix_agent.sandbox import SandboxManager
-from tests.conftest import SubprocessMocker, StubChannel
+from conftest import SubprocessMocker, StubChannel
 
 
 GITHUB_MESSAGE = "Repository: owner/repo\n\n# Fix the bug\n\nDetails here"
@@ -83,6 +83,12 @@ async def test_gh_task_id_routes_to_process_github(settings):
             return (0, "fix.py\n", "")
         if "ruff" in cmd or "pytest" in cmd:
             return (0, "all passed", "")
+        if "git rev-parse --abbrev-ref HEAD" in cmd:
+            return (0, "agent/fix-42\n", "")
+        if "git push" in cmd:
+            return (0, "", "")
+        if "gh pr create" in cmd or "gh pr view" in cmd:
+            return (0, "https://github.com/owner/repo/pull/1\n", "")
         return (0, "", "")
 
     with patch("asyncio.create_subprocess_exec", mocker):
@@ -167,6 +173,12 @@ async def test_process_github_delivers_result_with_pr_url(settings):
     async def mock_exec(chat_id, cmd):
         if "git diff --name-only" in cmd:
             return (0, "fix.py\n", "")
+        if "git rev-parse --abbrev-ref HEAD" in cmd:
+            return (0, "agent/fix-12\n", "")
+        if "git push" in cmd:
+            return (0, "", "")
+        if "gh pr create" in cmd or "gh pr view" in cmd:
+            return (0, "https://github.com/owner/repo/pull/99\n", "")
         return (0, "", "")
 
     sandbox.exec = mock_exec
@@ -280,6 +292,12 @@ async def test_process_github_retry_prompt_includes_failure_reasons(settings):
             return (0, "fix.py\n", "")
         if "git clone" in cmd or "test -d" in cmd:
             return (0, "", "")
+        if "git rev-parse --abbrev-ref HEAD" in cmd:
+            return (0, "agent/fix-15\n", "")
+        if "git push" in cmd:
+            return (0, "", "")
+        if "gh pr create" in cmd or "gh pr view" in cmd:
+            return (0, "https://github.com/owner/repo/pull/1\n", "")
         if call_count[0] == 0:
             call_count[0] += 1
             return (1, "lint errors: E501", "")
@@ -486,3 +504,131 @@ async def test_process_github_clone_failure(settings):
 
     assert len(channel.errors) == 1
     assert "clone" in channel.errors[0][1].lower() or "Clone" in channel.errors[0][1]
+
+
+# ------------------------------------------------------------------ #
+# _host_push tests
+# ------------------------------------------------------------------ #
+
+
+@pytest.mark.asyncio
+async def test_host_push_strips_forbidden_files(settings):
+    """_host_push strips forbidden files from commit before pushing."""
+    mocker = SubprocessMocker()
+    _setup_default_subprocess(mocker, None)
+    runner, sandbox = _make_runner(settings, mocker)
+
+    ipc_dir = os.path.join(settings.ipc_base_dir, "sandbox-gh-30")
+    os.makedirs(ipc_dir, exist_ok=True)
+
+    exec_cmds = []
+
+    async def mock_exec(chat_id, cmd):
+        exec_cmds.append(cmd)
+        if "git rev-parse --abbrev-ref HEAD" in cmd:
+            return (0, "agent/fix-30\n", "")
+        if "git diff --name-only" in cmd:
+            return (0, "fix.py\npyproject.toml\nuv.lock\n", "")
+        if "git push" in cmd:
+            return (0, "", "")
+        if "gh pr create" in cmd or "gh pr view" in cmd:
+            return (0, "https://github.com/owner/repo/pull/30\n", "")
+        return (0, "", "")
+
+    sandbox.exec = mock_exec
+    sandbox._containers = {"gh-30": "sandbox-gh-30"}
+
+    with patch("asyncio.create_subprocess_exec", mocker):
+        pr_url = await runner._host_push("gh-30", "/workspace/repo", "owner/repo", False)
+
+    assert pr_url == "https://github.com/owner/repo/pull/30"
+    # Should have called git checkout to strip forbidden files
+    strip_cmds = [c for c in exec_cmds if "git checkout" in c and "pyproject.toml" in c]
+    assert len(strip_cmds) >= 1
+
+
+@pytest.mark.asyncio
+async def test_host_push_ci_fix_uses_force_push(settings):
+    """_host_push with is_ci_fix=True uses --force."""
+    mocker = SubprocessMocker()
+    _setup_default_subprocess(mocker, None)
+    runner, sandbox = _make_runner(settings, mocker)
+
+    ipc_dir = os.path.join(settings.ipc_base_dir, "sandbox-gh-31")
+    os.makedirs(ipc_dir, exist_ok=True)
+
+    exec_cmds = []
+
+    async def mock_exec(chat_id, cmd):
+        exec_cmds.append(cmd)
+        if "git rev-parse --abbrev-ref HEAD" in cmd:
+            return (0, "agent/fix-31\n", "")
+        if "git diff --name-only" in cmd:
+            return (0, "fix.py\n", "")
+        if "git push" in cmd:
+            return (0, "", "")
+        if "gh pr view" in cmd:
+            return (0, "https://github.com/owner/repo/pull/31\n", "")
+        return (0, "", "")
+
+    sandbox.exec = mock_exec
+    sandbox._containers = {"gh-31": "sandbox-gh-31"}
+
+    with patch("asyncio.create_subprocess_exec", mocker):
+        pr_url = await runner._host_push("gh-31", "/workspace/repo", "owner/repo", True)
+
+    assert pr_url == "https://github.com/owner/repo/pull/31"
+    push_cmds = [c for c in exec_cmds if "git push" in c]
+    assert len(push_cmds) == 1
+    assert "--force" in push_cmds[0]
+
+
+@pytest.mark.asyncio
+async def test_host_push_no_branch_returns_none(settings):
+    """_host_push returns None when on main branch."""
+    mocker = SubprocessMocker()
+    _setup_default_subprocess(mocker, None)
+    runner, sandbox = _make_runner(settings, mocker)
+
+    async def mock_exec(chat_id, cmd):
+        if "git rev-parse --abbrev-ref HEAD" in cmd:
+            return (0, "main\n", "")
+        return (0, "", "")
+
+    sandbox.exec = mock_exec
+    sandbox._containers = {"gh-32": "sandbox-gh-32"}
+
+    with patch("asyncio.create_subprocess_exec", mocker):
+        pr_url = await runner._host_push("gh-32", "/workspace/repo", "owner/repo", False)
+
+    assert pr_url is None
+
+
+# ------------------------------------------------------------------ #
+# check_forbidden tests
+# ------------------------------------------------------------------ #
+
+
+def test_check_forbidden_names():
+    """check_forbidden catches forbidden file names."""
+    from matrix_agent.sandbox import check_forbidden
+    result = check_forbidden(["fix.py", "pyproject.toml", "uv.lock"])
+    assert "pyproject.toml" in result
+    assert "uv.lock" in result
+    assert "fix.py" not in result
+
+
+def test_check_forbidden_prefixes():
+    """check_forbidden catches forbidden directory prefixes."""
+    from matrix_agent.sandbox import check_forbidden
+    result = check_forbidden(["src/main.py", ".github/workflows/ci.yml", ".gemini/settings.json"])
+    assert ".github/workflows/ci.yml" in result
+    assert ".gemini/settings.json" in result
+    assert "src/main.py" not in result
+
+
+def test_check_forbidden_clean():
+    """check_forbidden returns empty list for clean files."""
+    from matrix_agent.sandbox import check_forbidden
+    result = check_forbidden(["src/main.py", "tests/test_main.py"])
+    assert result == []

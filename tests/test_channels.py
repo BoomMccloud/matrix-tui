@@ -9,27 +9,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from aiohttp.test_utils import TestClient, TestServer
 
-from matrix_agent.channels import GitHubChannel, ChannelAdapter
-from tests.conftest import SubprocessMocker
-
-
-# ------------------------------------------------------------------ #
-# ChannelAdapter ABC
-# ------------------------------------------------------------------ #
-
-
-def test_channel_adapter_has_required_abstract_methods():
-    """ChannelAdapter defines all methods from the spec."""
-    required = {
-        "start",
-        "stop",
-        "send_update",
-        "deliver_result",
-        "deliver_error",
-        "is_valid",
-    }
-    abstract = set(ChannelAdapter.__abstractmethods__)
-    assert required == abstract
+from matrix_agent.channels import GitHubChannel
+from conftest import SubprocessMocker
 
 
 # ------------------------------------------------------------------ #

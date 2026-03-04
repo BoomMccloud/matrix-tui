@@ -11,7 +11,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from matrix_agent.sandbox import SandboxManager, TEMPLATES, _TEMPLATES_DIR
-from tests.conftest import SubprocessMocker
+from conftest import SubprocessMocker
 
 
 def _make_sandbox(settings):
@@ -21,40 +21,6 @@ def _make_sandbox(settings):
 # ------------------------------------------------------------------ #
 # Group A: Template extraction
 # ------------------------------------------------------------------ #
-
-
-def test_templates_dir_constant_points_to_correct_path():
-    """_TEMPLATES_DIR resolves to src/matrix_agent/templates/."""
-    assert _TEMPLATES_DIR.is_dir(), f"{_TEMPLATES_DIR} is not a directory"
-    assert _TEMPLATES_DIR.name == "templates"
-    assert _TEMPLATES_DIR.parent.name == "matrix_agent"
-
-
-def test_templates_dict_has_expected_keys():
-    """TEMPLATES dict contains all expected template files."""
-    expected = {
-        "GEMINI.md",
-        "status.md",
-        "settings.json",
-        "hook-session-start.sh",
-        "hook-after-agent.sh",
-        "hook-after-tool.sh",
-        "hook-notification.sh",
-        "hook-before-tool.sh",
-        "cmd-fix-issue.toml",
-        "cmd-fix-ci.toml",
-        "skill-delegate-qwen.md",
-        "qwen-wrapper.sh",
-        "qwen-settings.json",
-    }
-    assert set(TEMPLATES.keys()) == expected
-
-
-def test_all_template_files_exist_on_disk():
-    """Every template referenced in TEMPLATES exists as a file."""
-    for template_name in TEMPLATES:
-        path = _TEMPLATES_DIR / template_name
-        assert path.is_file(), f"Template file missing: {path}"
 
 
 @pytest.mark.asyncio

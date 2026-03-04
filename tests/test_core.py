@@ -45,6 +45,8 @@ def _make_sandbox():
 
     sandbox.create = AsyncMock(side_effect=fake_create)
     sandbox.destroy = AsyncMock()
+    sandbox.has_container = MagicMock(side_effect=lambda cid: cid in sandbox._containers)
+    sandbox.container_ids = MagicMock(side_effect=lambda: list(sandbox._containers))
     return sandbox
 
 

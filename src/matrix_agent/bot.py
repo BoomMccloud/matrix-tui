@@ -203,7 +203,7 @@ class Bot:
 
     async def _recover_matrix_rooms(self) -> None:
         """Pre-register tasks for Matrix rooms that survived the restart."""
-        for room_id in list(self.sandbox._containers):
+        for room_id in self.sandbox.container_ids():
             if room_id in self.client.rooms:
                 log.info("Recovering Matrix room %s", room_id)
                 channel = MatrixChannel(self, room_id)

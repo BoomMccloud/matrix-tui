@@ -778,6 +778,7 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "aiofiles" },
+    { name = "aiohttp" },
     { name = "litellm" },
     { name = "matrix-nio" },
     { name = "pydantic-settings" },
@@ -793,6 +794,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "aiofiles", specifier = ">=24.0" },
+    { name = "aiohttp", specifier = ">=3.9" },
     { name = "litellm", specifier = ">=1.0" },
     { name = "matrix-nio", specifier = ">=0.24" },
     { name = "pydantic-settings", specifier = ">=2.0" },

@@ -48,6 +48,24 @@ STATE_PATH = "/home/matrix-tui/state.json"
 
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*[mABCDEFGHJKSTfisu]")
 
+# Forbidden files — shared by check_forbidden(), validate_work(), and hook-before-tool.sh
+# Keep in sync with DENIED_NAMES / DENIED_DIRS in hook-before-tool.sh
+FORBIDDEN_NAMES = {
+    "pyproject.toml", "uv.lock", "package-lock.json", "Cargo.lock", "go.sum",
+    ".gitignore", "CLAUDE.md", "AGENTS.md", "Containerfile", "Makefile",
+    "pr-url.txt", "acceptance-criteria.md", "status.md", "GEMINI.md",
+}
+FORBIDDEN_PREFIXES = (".gemini/", ".claude/", ".github/", "scripts/", "src/matrix_agent/templates/")
+
+
+def check_forbidden(file_list: list[str]) -> list[str]:
+    """Return list of forbidden files from a file list. Empty = clean."""
+    return [
+        f for f in file_list
+        if f in FORBIDDEN_NAMES
+        or any(f.startswith(p) for p in FORBIDDEN_PREFIXES)
+    ]
+
 
 def _strip_ansi(text: str) -> str:
     return _ANSI_RE.sub("", text)
@@ -68,6 +86,12 @@ class SandboxManager:
         self._containers: dict[str, str] = {}  # chat_id -> container_name
         # Reference to decider histories — set by Decider after construction
         self._histories: dict[str, list[dict]] | None = None
+
+    def has_container(self, chat_id: str) -> bool:
+        return chat_id in self._containers
+
+    def container_ids(self) -> list[str]:
+        return list(self._containers)
 
     async def _run(
         self, *args: str, timeout: int | None = None, stdin_data: bytes | None = None,
@@ -433,6 +457,17 @@ class SandboxManager:
             return content or None
         return None
 
+    def write_ipc_file(self, chat_id: str, filename: str, content: str) -> None:
+        """Write a file to the container's IPC directory."""
+        name = self._containers.get(chat_id)
+        if not name:
+            return
+        ipc_host = os.path.join(self.settings.ipc_base_dir, name)
+        os.makedirs(ipc_host, exist_ok=True)
+        path = os.path.join(ipc_host, filename)
+        with open(path, "w") as f:
+            f.write(content)
+
     async def validate_work(
         self, chat_id: str, repo_name: str,
     ) -> tuple[bool, list[str]]:
@@ -442,6 +477,10 @@ class SandboxManager:
         """
         failures: list[str] = []
         repo_path = f"/workspace/{repo_name}"
+
+        # Resolve container and IPC dir once
+        name = self._containers.get(chat_id)
+        ipc_host = os.path.join(self.settings.ipc_base_dir, name) if name else None
 
         # 1. Run tests — detect project type from marker files
         detect_and_test = (
@@ -476,9 +515,7 @@ class SandboxManager:
             log.info("[%s] Scope: %d files changed: %s", chat_id[:20], len(changed_files), ", ".join(changed_files))
 
             # Check file manifest — declared scope
-            name = self._containers.get(chat_id)
-            if name:
-                ipc_host = os.path.join(self.settings.ipc_base_dir, name)
+            if ipc_host:
                 manifest_path = os.path.join(ipc_host, "changed-files.txt")
                 if os.path.exists(manifest_path):
                     with open(manifest_path) as mf:
@@ -497,14 +534,7 @@ class SandboxManager:
                     )
 
             # Block forbidden file patterns
-            forbidden = [
-                f for f in changed_files
-                if f in ("pyproject.toml", "uv.lock", "package-lock.json", "Cargo.lock", "go.sum",
-                         ".gitignore", "CLAUDE.md", "AGENTS.md", "Containerfile", "Makefile",
-                         "pr-url.txt", "acceptance-criteria.md", "status.md", "GEMINI.md")
-                or f.startswith((".gemini/", ".claude/", ".github/", "scripts/",
-                                 "src/matrix_agent/templates/"))
-            ]
+            forbidden = check_forbidden(changed_files)
             if forbidden:
                 failures.append(
                     f"Scope creep: modified forbidden files: {', '.join(forbidden)}. "
@@ -512,9 +542,7 @@ class SandboxManager:
                 )
 
         # 3. Check pr-url.txt exists
-        name = self._containers.get(chat_id)
-        if name:
-            ipc_host = os.path.join(self.settings.ipc_base_dir, name)
+        if ipc_host:
             pr_url_path = os.path.join(ipc_host, "pr-url.txt")
             if not os.path.exists(pr_url_path):
                 failures.append("No PR created (pr-url.txt missing)")
