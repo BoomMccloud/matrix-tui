@@ -116,11 +116,38 @@ async def test_pre_register_idempotent():
 
     await runner.pre_register("task-pr2", channel)
     original_queue = runner._queues["task-pr2"]
+    original_worker = runner._workers["task-pr2"]
 
     await runner.pre_register("task-pr2", channel)
     assert runner._queues["task-pr2"] is original_queue  # same object
+    assert runner._workers["task-pr2"] is original_worker  # same object
 
     await runner._cleanup("task-pr2")
+
+
+@pytest.mark.asyncio
+async def test_reconcile_preserves_valid_tasks():
+    """reconcile() does not clean up tasks when is_valid returns True."""
+    sandbox = _make_sandbox()
+    decider = _make_decider([])
+    runner = TaskRunner(decider, sandbox)
+    channel = MockChannel()
+
+    await runner.enqueue("task-valid", "hello", channel)
+    
+    # Ensure it's tracked
+    assert "task-valid" in runner._processing
+
+    # Default MockChannel returns True for is_valid
+    await runner.reconcile()
+
+    assert "task-valid" in runner._queues
+    assert "task-valid" in runner._channels
+    assert "task-valid" in runner._processing
+    assert "task-valid" in runner._workers
+    sandbox.destroy.assert_not_called()
+
+    await runner._cleanup("task-valid")
 
 
 @pytest.mark.asyncio
