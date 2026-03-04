@@ -247,3 +247,48 @@ async def test_destroy_orphans_preserves_pre_registered():
     assert "recovered-1" in runner._processing
 
     await runner._cleanup("recovered-1")
+
+
+@pytest.mark.asyncio
+async def test_process_timeout_handling():
+    """_process() delivers error and task can be cleaned up on timeout."""
+    sandbox = _make_sandbox()
+    # overall_timeout = coding_timeout_seconds + 300
+    # To get a 0.1s timeout, we set coding_timeout_seconds to -299.9
+    sandbox.settings.coding_timeout_seconds = -299.9
+
+    # Mock decider to sleep longer than the timeout
+    decider = MagicMock()
+
+    async def slow_handle_message(*args, **kwargs):
+        await asyncio.sleep(1.0)
+        yield "Never reached", None, "completed"
+
+    decider.handle_message = slow_handle_message
+
+    runner = TaskRunner(decider, sandbox)
+    channel = MockChannel()
+    task_id = "task-timeout"
+
+    # Enqueue a message and wait for processing
+    await runner.enqueue(task_id, "hello", channel)
+
+    # Wait for the timeout to trigger and deliver_error to be called
+    for _ in range(20):
+        if channel.errors:
+            break
+        await asyncio.sleep(0.1)
+
+    # Verify deliver_error is called with a message containing "timed out"
+    assert len(channel.errors) == 1
+    assert channel.errors[0][0] == task_id
+    assert "timed out" in channel.errors[0][1].lower()
+
+    # Verify the task can be cleaned up (e.g. via reconcile if marked invalid)
+    channel.is_valid = AsyncMock(return_value=False)
+    await runner.reconcile()
+
+    assert task_id not in runner._workers
+    assert task_id not in runner._queues
+    assert task_id not in runner._processing
+    sandbox.destroy.assert_called_with(task_id)
