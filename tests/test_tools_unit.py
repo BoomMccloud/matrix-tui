@@ -1,11 +1,13 @@
 """Unit tests for matrix_agent.tools."""
 
-from unittest.mock import AsyncMock
+import asyncio
+from unittest.mock import AsyncMock, patch
 
 from matrix_agent.tools import (
     _shell_quote,
     execute_tool,
     _create_pull_request,
+    _self_update,
 )
 
 
@@ -264,6 +266,18 @@ class TestExecuteTool:
         result, image = await execute_tool(sandbox, "chat-1", "unknown_tool", '{}')
 
         assert result == "Unknown tool: unknown_tool"
+
+    @patch("matrix_agent.tools._self_update")
+    async def test_execute_tool_self_update(self, mock_update):
+        """execute_tool: verify it calls _self_update."""
+        sandbox = self._make_sandbox()
+        mock_update.return_value = "update result"
+
+        result, image = await execute_tool(sandbox, "chat-1", "self_update", '{"branch": "main"}')
+
+        mock_update.assert_called_once_with(branch="main")
+        assert result == "update result"
+        assert image is None
 
     async def test_run_command_output_truncation(self):
         """run_command: output > 10000 chars is truncated."""
@@ -734,3 +748,138 @@ class TestCreatePullRequest:
         # The first call is the find command, skip it
         for call in calls[1:]:
             assert call.startswith("cd /workspace/subdir &&")
+
+
+# ------------------------------------------------------------------ #
+# _self_update tests
+# ------------------------------------------------------------------ #
+
+
+class TestSelfUpdate:
+    """Tests for _self_update function."""
+
+    @patch("matrix_agent.tools.asyncio.create_subprocess_exec")
+    @patch("matrix_agent.tools.asyncio.create_task")
+    async def test_self_update_success(self, mock_create_task, mock_exec):
+        """Successful update: git pull and podman build."""
+        # Mock for git pull
+        mock_proc_pull = AsyncMock()
+        mock_proc_pull.communicate.return_value = (b"Already up to date", b"")
+        mock_proc_pull.returncode = 0
+        
+        # Mock for podman build
+        mock_proc_build = AsyncMock()
+        mock_proc_build.communicate.return_value = (b"Successfully built", b"")
+        mock_proc_build.returncode = 0
+        
+        mock_exec.side_effect = [mock_proc_pull, mock_proc_build]
+        
+        result = await _self_update()
+        
+        assert "git pull:\nAlready up to date" in result
+        assert "Image build: OK" in result
+        assert "Restarting service in 2s..." in result
+        
+        assert mock_exec.call_count == 2
+        # Verify git pull call
+        mock_exec.assert_any_call(
+            "git", "pull",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+            cwd="/home/matrix-tui"
+        )
+        # Verify podman build call
+        mock_exec.assert_any_call(
+            "podman", "build", "-t", "matrix-agent-sandbox:latest", "-f", "Containerfile", ".",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+            cwd="/home/matrix-tui"
+        )
+        mock_create_task.assert_called_once()
+        # Clean up coroutine to avoid RuntimeWarning
+        mock_create_task.call_args[0][0].close()
+
+    @patch("matrix_agent.tools.asyncio.create_subprocess_exec")
+    async def test_self_update_git_pull_failure(self, mock_exec):
+        """Git pull failure: returns error message."""
+        mock_proc_pull = AsyncMock()
+        mock_proc_pull.communicate.return_value = (b"Conflict error", b"")
+        mock_proc_pull.returncode = 1
+        
+        mock_exec.return_value = mock_proc_pull
+        
+        result = await _self_update()
+        
+        assert "git pull failed (exit 1):" in result
+        assert "Conflict error" in result
+        # Should not proceed to podman build
+        assert mock_exec.call_count == 1
+
+    @patch("matrix_agent.tools.asyncio.create_subprocess_exec")
+    async def test_self_update_podman_build_failure(self, mock_exec):
+        """Podman build failure: returns error message."""
+        # Mock for git pull (success)
+        mock_proc_pull = AsyncMock()
+        mock_proc_pull.communicate.return_value = (b"Updated", b"")
+        mock_proc_pull.returncode = 0
+        
+        # Mock for podman build (failure)
+        mock_proc_build = AsyncMock()
+        mock_proc_build.communicate.return_value = (b"Docker-style error", b"")
+        mock_proc_build.returncode = 125
+        
+        mock_exec.side_effect = [mock_proc_pull, mock_proc_build]
+        
+        result = await _self_update()
+        
+        assert "git pull OK, but image build failed (exit 125):" in result
+        assert "Docker-style error" in result
+        assert mock_exec.call_count == 2
+
+    @patch("matrix_agent.tools.asyncio.create_subprocess_exec")
+    @patch("matrix_agent.tools.asyncio.create_task")
+    async def test_self_update_with_branch(self, mock_create_task, mock_exec):
+        """Update with specific branch: fetch and checkout."""
+        # 1. git fetch
+        mock_proc_fetch = AsyncMock()
+        mock_proc_fetch.communicate.return_value = (b"fetched", b"")
+        mock_proc_fetch.returncode = 0
+        # 2. git checkout
+        mock_proc_checkout = AsyncMock()
+        mock_proc_checkout.communicate.return_value = (b"Switched to branch", b"")
+        mock_proc_checkout.returncode = 0
+        # 3. git pull
+        mock_proc_pull = AsyncMock()
+        mock_proc_pull.communicate.return_value = (b"Already up to date", b"")
+        mock_proc_pull.returncode = 0
+        # 4. podman build
+        mock_proc_build = AsyncMock()
+        mock_proc_build.communicate.return_value = (b"OK", b"")
+        mock_proc_build.returncode = 0
+        
+        mock_exec.side_effect = [mock_proc_fetch, mock_proc_checkout, mock_proc_pull, mock_proc_build]
+        
+        result = await _self_update(branch="feature-x")
+        
+        assert "git pull:\nAlready up to date" in result
+        assert mock_exec.call_count == 4
+        mock_exec.assert_any_call("git", "fetch", "origin", stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT, cwd="/home/matrix-tui")
+        mock_exec.assert_any_call("git", "checkout", "feature-x", stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT, cwd="/home/matrix-tui")
+        # Clean up coroutine to avoid RuntimeWarning
+        mock_create_task.call_args[0][0].close()
+
+    @patch("matrix_agent.tools.asyncio.create_subprocess_exec")
+    @patch("matrix_agent.tools.asyncio.sleep")
+    async def test_delayed_restart(self, mock_sleep, mock_exec):
+        """_delayed_restart: waits and then restarts service."""
+        from matrix_agent.tools import _delayed_restart
+        
+        mock_proc = AsyncMock()
+        mock_proc.wait = AsyncMock()
+        mock_exec.return_value = mock_proc
+        
+        await _delayed_restart()
+        
+        mock_sleep.assert_called_once_with(2)
+        mock_exec.assert_called_once_with("systemctl", "restart", "matrix-agent")
+        mock_proc.wait.assert_called_once()
