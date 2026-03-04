@@ -537,3 +537,46 @@ async def test_container_create_and_destroy(settings):
     rm_calls = [c for c in mocker.calls if len(c) > 1 and c[1] == "rm"]
     assert len(stop_calls) >= 1
     assert len(rm_calls) >= 1
+
+
+@pytest.mark.asyncio
+async def test_create_retry_on_already_in_use(settings):
+    """create() should rm and retry if podman run fails with 'already in use'."""
+    mocker = SubprocessMocker()
+
+    # Track calls to "run" to provide different responses
+    run_calls = []
+
+    async def stateful_mocker(*args, **kwargs):
+        if args[:2] == ("podman", "run"):
+            run_calls.append(args)
+            if len(run_calls) == 1:
+                # First run fails
+                return await SubprocessMocker().on(
+                    "podman", "run", returncode=125, stderr=b"already in use"
+                )(*args, **kwargs)
+            # Second run succeeds
+            return await SubprocessMocker().on(
+                "podman", "run", stdout=b"new-container-id"
+            )(*args, **kwargs)
+
+        # Other calls (rm, exec) use the main mocker
+        return await mocker(*args, **kwargs)
+
+    mocker.on("podman", "rm", "-f")
+    mocker.on("podman", "exec")
+
+    sandbox = _make_sandbox(settings)
+
+    with patch("asyncio.create_subprocess_exec", side_effect=stateful_mocker), \
+         patch("matrix_agent.sandbox.STATE_PATH", "/dev/null"):
+        name = await sandbox.create("retry-chat")
+        assert name == "sandbox-retry-chat"
+        assert "retry-chat" in sandbox._containers
+
+    # Verify call sequence
+    assert len(run_calls) == 2
+    # Verify podman rm -f was called between runs
+    rm_calls = [c for c in mocker.calls if c[:3] == ("podman", "rm", "-f")]
+    assert len(rm_calls) == 1
+    assert rm_calls[0][3] == "sandbox-retry-chat"
