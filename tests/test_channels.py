@@ -315,7 +315,7 @@ async def test_webhook_ignores_bot_comment_by_prefix(client, github_channel):
 
 @pytest.mark.asyncio
 async def test_deliver_error(github_channel):
-    """deliver_error posts a comment with the error message."""
+    """deliver_error posts a comment with the error message AND closes the issue."""
     mock_proc = MagicMock()
     mock_proc.returncode = 0
     mock_proc.communicate = AsyncMock(return_value=(b"", b""))
@@ -325,7 +325,9 @@ async def test_deliver_error(github_channel):
     ) as mock_exec:
         await github_channel.deliver_error("gh-123", "Internal error")
 
-    mock_exec.assert_called_once_with(
+    assert mock_exec.call_count == 2
+    # First call: comment
+    mock_exec.assert_any_call(
         "gh",
         "issue",
         "comment",
@@ -335,6 +337,8 @@ async def test_deliver_error(github_channel):
         stdout=-1,
         stderr=-1,
     )
+    # Second call: close
+    mock_exec.assert_any_call("gh", "issue", "close", "123", stdout=-1, stderr=-1)
 
 
 @pytest.mark.asyncio

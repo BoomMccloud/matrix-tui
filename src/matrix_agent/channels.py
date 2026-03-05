@@ -107,6 +107,17 @@ class GitHubChannel(ChannelAdapter):
         stdout, stderr = await proc.communicate()
         if proc.returncode != 0:
             log.error("gh issue comment (error) failed for #%s: %s", issue_number, stderr.decode())
+            return
+
+        # Close the issue on failure so it's not retried on restart
+        proc = await asyncio.create_subprocess_exec(
+            "gh", "issue", "close", issue_number,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await proc.communicate()
+        if proc.returncode != 0:
+            log.error("gh issue close failed for #%s: %s", issue_number, stderr.decode())
 
     async def is_valid(self, task_id: str) -> bool:
         """Check if the issue is still open with the agent-task label."""
