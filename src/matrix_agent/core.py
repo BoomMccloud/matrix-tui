@@ -148,10 +148,22 @@ class TaskRunner:
         if not is_ci_fix:
             issue_num = task_id.replace("gh-", "").split("-")[0]
             branch_name = f"agent/issue-{issue_num}"
-            await self.sandbox.exec(
+            rc, _, err = await self.sandbox.exec(
                 task_id,
                 f"cd {repo_path} && git checkout -b {branch_name}",
             )
+            if rc != 0:
+                # Fallback: branch might already exist
+                rc, _, err = await self.sandbox.exec(
+                    task_id,
+                    f"cd {repo_path} && git checkout {branch_name}",
+                )
+                if rc != 0:
+                    await channel.deliver_error(
+                        task_id,
+                        f"Failed to create or switch to branch {branch_name}: {err}",
+                    )
+                    return
 
         # Build prompt
         if is_ci_fix:

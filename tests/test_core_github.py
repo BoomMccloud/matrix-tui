@@ -213,13 +213,12 @@ async def test_process_github_retries_on_validation_failure(settings):
     sandbox.code_stream = counting_code_stream
 
     async def mock_exec(chat_id, cmd):
-        if "git diff --name-only" in cmd:
-            return (0, "fix.py\n", "")
+        if "git diff --name-only" in cmd or "git checkout" in cmd:
+            return (0, "ok", "")
         if "git clone" in cmd or "test -d" in cmd:
             return (0, "", "")
         # Tests/lint fail
         return (1, "FAILED", "")
-
     sandbox.exec = mock_exec
 
     with patch("asyncio.create_subprocess_exec", mocker):
@@ -246,7 +245,7 @@ async def test_process_github_delivers_error_after_max_retries(settings):
     sandbox.code_stream = mock_code_stream
 
     async def mock_exec(chat_id, cmd):
-        if "git diff --name-only" in cmd:
+        if "git diff --name-only" in cmd or "git checkout" in cmd:
             return (0, "fix.py\n", "")
         if "git clone" in cmd or "test -d" in cmd:
             return (0, "", "")
@@ -506,6 +505,78 @@ async def test_process_github_clone_failure(settings):
 
     assert len(channel.errors) == 1
     assert "clone" in channel.errors[0][1].lower() or "Clone" in channel.errors[0][1]
+
+
+@pytest.mark.asyncio
+async def test_process_github_branch_creation_fallback(settings):
+    """If git checkout -b fails, try git checkout (switch to existing)."""
+    mocker = SubprocessMocker()
+    _setup_default_subprocess(mocker, None)
+    runner, sandbox = _make_runner(settings, mocker)
+    channel = StubChannel()
+
+    ipc_dir = os.path.join(settings.ipc_base_dir, "sandbox-gh-23")
+    os.makedirs(ipc_dir, exist_ok=True)
+    with open(os.path.join(ipc_dir, "pr-url.txt"), "w") as f:
+        f.write("https://github.com/owner/repo/pull/1")
+    with open(os.path.join(ipc_dir, "acceptance-criteria.md"), "w") as f:
+        f.write("- Done")
+    with open(os.path.join(ipc_dir, "changed-files.txt"), "w") as f:
+        f.write("fix.py\n")
+
+    exec_cmds = []
+
+    async def mock_exec(chat_id, cmd):
+        exec_cmds.append(cmd)
+        if "git checkout -b" in cmd:
+            return (1, "", "fatal: A branch named 'agent/issue-23' already exists.")
+        if "git checkout agent/issue-23" in cmd:
+            return (0, "Switched to branch 'agent/issue-23'", "")
+        if "git diff --name-only" in cmd:
+            return (0, "fix.py\n", "")
+        if "git rev-parse --abbrev-ref HEAD" in cmd:
+            return (0, "agent/issue-23\n", "")
+        if "git push" in cmd:
+            return (0, "", "")
+        if "gh pr create" in cmd or "gh pr view" in cmd:
+            return (0, "https://github.com/owner/repo/pull/1\n", "")
+        return (0, "", "")
+
+    sandbox.exec = mock_exec
+
+    with patch("asyncio.create_subprocess_exec", mocker):
+        await _run_pipeline(runner, "gh-23", GITHUB_MESSAGE, channel)
+
+    # Should have tried both
+    assert any("git checkout -b" in c for c in exec_cmds)
+    assert any("git checkout agent/issue-23" in c for c in exec_cmds)
+    assert len(channel.errors) == 0
+    assert len(channel.results) == 1
+
+
+@pytest.mark.asyncio
+async def test_process_github_branch_creation_total_failure(settings):
+    """If both checkout -b and checkout fail, deliver error."""
+    mocker = SubprocessMocker()
+    _setup_default_subprocess(mocker, None)
+    runner, sandbox = _make_runner(settings, mocker)
+    channel = StubChannel()
+
+    async def failing_exec(chat_id, cmd):
+        if "git checkout -b" in cmd:
+            return (1, "", "creation failed")
+        if "git checkout agent/issue-24" in cmd:
+            return (1, "", "switch failed")
+        return (0, "", "")
+
+    sandbox.exec = failing_exec
+
+    with patch("asyncio.create_subprocess_exec", mocker):
+        await _run_pipeline(runner, "gh-24", GITHUB_MESSAGE, channel)
+
+    assert len(channel.errors) == 1
+    assert "Failed to create or switch to branch" in channel.errors[0][1]
+    assert "switch failed" in channel.errors[0][1]
 
 
 # ------------------------------------------------------------------ #
