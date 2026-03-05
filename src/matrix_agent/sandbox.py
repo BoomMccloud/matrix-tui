@@ -534,12 +534,23 @@ class SandboxManager:
                         "write declared files to /workspace/.ipc/changed-files.txt"
                     )
 
-            # Block forbidden file patterns
+            # Block forbidden file patterns — auto-revert them
             forbidden = check_forbidden(changed_files)
             if forbidden:
+                log.warning("[%s] Auto-reverting forbidden files: %s",
+                            chat_id[:20], ", ".join(forbidden))
+                escaped = " ".join(f"'{f}'" for f in forbidden)
+                await self.exec(
+                    chat_id,
+                    f"cd {repo_path} && "
+                    f"base=$(git merge-base HEAD origin/main 2>/dev/null || "
+                    f"git merge-base HEAD origin/master 2>/dev/null || echo HEAD~1) && "
+                    f"git checkout $base -- {escaped} && "
+                    f"git commit --amend --no-edit",
+                )
                 failures.append(
-                    f"Scope creep: modified forbidden files: {', '.join(forbidden)}. "
-                    f"Revert with: git checkout HEAD~1 -- {' '.join(forbidden)}"
+                    f"Auto-reverted forbidden files: {', '.join(forbidden)}. "
+                    f"Do NOT modify these files."
                 )
 
         # 3. Check pr-url.txt exists

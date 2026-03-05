@@ -46,6 +46,16 @@ elif [ -f "go.mod" ]; then
   go test ./... >> "$BASELINE" 2>&1 || true
 fi
 
+# Protect generic files — make lock files, CI configs, and git metadata read-only
+PROTECTED_FILES="uv.lock package-lock.json yarn.lock pnpm-lock.yaml Cargo.lock go.sum Gemfile.lock composer.lock poetry.lock .gitignore .gitattributes .gitmodules .gitlab-ci.yml"
+for f in $PROTECTED_FILES; do
+  [ -f "$f" ] && chmod 444 "$f"
+done
+PROTECTED_DIRS=".github .gitlab .circleci"
+for d in $PROTECTED_DIRS; do
+  [ -d "$d" ] && chmod -R a-w "$d"
+done
+
 # Also read CI config if present
 if [ -f ".github/workflows/ci.yml" ]; then
   echo "--- CI config ---" >> "$BASELINE"
