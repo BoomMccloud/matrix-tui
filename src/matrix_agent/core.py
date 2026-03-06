@@ -357,3 +357,20 @@ class TaskRunner:
             if chat_id not in self._processing:
                 logger.info("Destroying orphan container: %s", chat_id)
                 await self.sandbox.destroy(chat_id)
+
+    async def shutdown(self) -> None:
+        """Cancel all workers and destroy all containers."""
+        logger.info("TaskRunner: shutting down")
+        # Cancel all workers
+        for task_id, worker in list(self._workers.items()):
+            worker.cancel()
+        
+        # Wait for workers to finish cancellation
+        if self._workers:
+            await asyncio.gather(*self._workers.values(), return_exceptions=True)
+        
+        # Cleanup all tasks (destroy containers)
+        for task_id in list(self._channels):
+            await self._cleanup(task_id)
+        
+        logger.info("TaskRunner: shutdown complete")

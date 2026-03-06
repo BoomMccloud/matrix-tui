@@ -3,6 +3,7 @@
 import asyncio
 import logging
 import os
+import signal
 
 from .config import Settings
 from .sandbox import SandboxManager
@@ -43,11 +44,38 @@ async def main():
     # Now _processing contains all recovered tasks — safe to destroy orphans
     await task_runner.destroy_orphans()
 
+    shutdown_event = asyncio.Event()
+
+    def handle_signal():
+        logging.info("Received shutdown signal")
+        shutdown_event.set()
+
+    loop = asyncio.get_running_loop()
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        loop.add_signal_handler(sig, handle_signal)
+
+    # Run bot until signal
+    bot_task = asyncio.create_task(bot.run())
+    
+    # Wait for shutdown signal
+    await shutdown_event.wait()
+    
+    logging.info("Starting graceful shutdown...")
+    
+    # Graceful teardown
+    bot_task.cancel()
     try:
-        await bot.run()
-    finally:
-        if github_channel:
-            await github_channel.stop()
+        await bot_task
+    except asyncio.CancelledError:
+        pass
+        
+    await task_runner.shutdown()
+    sandbox.save_state()
+    
+    if github_channel:
+        await github_channel.stop()
+    
+    logging.info("Bot exited cleanly")
 
 
 if __name__ == "__main__":

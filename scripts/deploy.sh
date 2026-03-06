@@ -41,16 +41,6 @@ git pull
 echo "==> rebuilding sandbox image"
 podman build -t "$IMAGE" -f Containerfile .
 
-echo "==> stopping sandbox containers"
-podman ps -a --filter "name=^sandbox-" --format "{{.Names}}" | while read -r name; do
-    echo "    stopping $name"
-    podman stop -t 5 "$name" 2>/dev/null || true
-    podman rm -f "$name" 2>/dev/null || true
-done
-
-echo "==> clearing state.json so bot starts fresh"
-rm -f state.json
-
 echo "==> restarting $SERVICE"
 systemctl restart "$SERVICE"
 
