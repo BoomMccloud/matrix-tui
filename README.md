@@ -61,6 +61,119 @@ Gemini    Qwen Code
   GitHub (gh CLI for PRs)
 ```
 
+## Using Matrix Agent with your own repository
+
+Matrix Agent can autonomously work on GitHub issues in **any repository** — not just its own. When an issue is labeled `agent-task`, the bot clones the repo into a fresh sandbox container, implements the fix, and opens a pull request.
+
+### How it works
+
+1. Open an issue in your target repository
+2. Add the `agent-task` label
+3. The bot picks it up via webhook, posts "Working on this issue..."
+4. Gemini CLI runs inside the sandbox: plans, implements, tests, and commits
+5. The bot opens a PR and posts the URL as a comment
+6. If CI fails on the PR, reopen the issue — the bot will automatically fix it
+
+### Setting up a target repository
+
+**Step 1 — Add the `agent-task` label** to your repo (create it if it doesn't exist):
+
+```bash
+gh label create agent-task --repo owner/your-repo --color aaaaaa --description "Agent will pick up this task"
+```
+
+**Step 2 — Configure the webhook** on your target repo:
+
+- Go to **Settings → Webhooks → Add webhook**
+- Payload URL: `http://<VPS_IP>:<GITHUB_WEBHOOK_PORT>/webhook/github`
+- Content type: `application/json`
+- Secret: the value of `GITHUB_WEBHOOK_SECRET` in your `.env`
+- Events: select **Issues** and **Issue comments**
+
+**Step 3 — Give the bot access** to your repo:
+
+Ensure your `GITHUB_TOKEN` in `.env` has `contents: write` and `pull-requests: write` permissions on the target repo. A fine-grained PAT scoped to the specific repo works well.
+
+**Step 4 — Set `GITHUB_REPO`** in `.env`:
+
+```env
+GITHUB_REPO=owner/your-repo
+```
+
+This tells the bot which repo to watch for crash recovery (re-enqueuing open `agent-task` issues on restart).
+
+### Writing good issues
+
+The bot works best with issues that are:
+
+- **Self-contained** — the change should be achievable within the existing codebase without external dependencies
+- **Specific** — include file names, method names, or error messages where relevant
+- **Testable** — include acceptance criteria the bot can verify by running tests
+
+**Good example:**
+
+> **Add input validation to the user registration endpoint**
+>
+> The `/api/register` endpoint in `src/routes/auth.py` does not validate that `email` is a valid email format or that `password` is at least 8 characters. Add validation and return a 400 with a descriptive error message if either check fails.
+>
+> Acceptance criteria:
+> - POST /api/register with invalid email returns 400
+> - POST /api/register with password < 8 chars returns 400
+> - Existing tests pass, new tests added for both cases
+
+**Tips:**
+
+- The bot runs `pytest` and `ruff` automatically — issues that ask for tests alongside code changes work better
+- Mention specific files to avoid scope creep
+- If the issue is unclear, the bot will post a clarification question as a comment rather than guessing
+- For web UI changes, ask the bot to commit a `screenshot.png` to the branch — it will serve the page locally and capture it, and the screenshot will appear in the PR description
+
+### The CI feedback loop
+
+If CI fails on the bot's PR, reopen the issue — the bot detects the reopen, reads the CI failure comment, and launches a targeted fix session. This loop repeats until CI is green.
+
+To enable this, add the CI feedback workflow to your repo (`.github/workflows/ci-feedback.yml`):
+
+```yaml
+name: CI Failure Feedback
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+
+jobs:
+  feedback:
+    if: ${{ github.event.workflow_run.conclusion == 'failure' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Post failure comment and reopen issue
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          PR_NUMBER=$(gh pr list --repo ${{ github.repository }} \
+            --head ${{ github.event.workflow_run.head_branch }} \
+            --json number -q '.[0].number')
+          if [ -z "$PR_NUMBER" ]; then exit 0; fi
+          ISSUE_NUMBER=$(gh pr view $PR_NUMBER --repo ${{ github.repository }} \
+            --json body -q '.body' | grep -oP '(?<=Closes #)\d+' | head -1)
+          if [ -z "$ISSUE_NUMBER" ]; then exit 0; fi
+          gh issue comment $ISSUE_NUMBER --repo ${{ github.repository }} \
+            --body "⚠️ CI failed on PR #$PR_NUMBER. Please fix the failing tests."
+          gh issue reopen $ISSUE_NUMBER --repo ${{ github.repository }}
+```
+
+### Safety guardrails
+
+The bot will never modify:
+
+- `pyproject.toml`, `uv.lock`, `package-lock.json`, `Cargo.lock`, `go.sum`
+- `.gitignore`, `CLAUDE.md`, `AGENTS.md`, `Containerfile`, `Makefile`
+- Anything under `.gemini/`, `.claude/`, `.github/`, `scripts/`
+
+If Gemini attempts to touch these, the host automatically reverts the changes before pushing.
+
+---
+
 ## Deployment
 
 ### Prerequisites
