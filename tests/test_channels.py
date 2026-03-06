@@ -109,7 +109,7 @@ async def test_webhook_valid_issue_labeled(client, github_channel):
 
     with patch(
         "matrix_agent.channels.asyncio.create_subprocess_exec", return_value=mock_proc
-    ):
+    ) as mock_exec:
         resp = await _post(client, _labeled_payload())
 
     assert resp.status == 202
@@ -117,6 +117,15 @@ async def test_webhook_valid_issue_labeled(client, github_channel):
     call_args = github_channel.task_runner.enqueue.call_args
     assert call_args[0][0] == "gh-7"  # task_id
     assert "Fix login bug" in call_args[0][1]  # message
+
+    # Verify gh issue comment call includes --repo
+    mock_exec.assert_any_call(
+        "gh", "issue", "comment", "7",
+        "--repo", "owner/repo",
+        "--body", "🤖 Working on this issue...",
+        stdout=-1,
+        stderr=-1,
+    )
 
 
 @pytest.mark.asyncio
@@ -332,13 +341,20 @@ async def test_deliver_error(github_channel):
         "issue",
         "comment",
         "123",
+        "--repo",
+        "owner/repo",
         "--body",
         "❌ Failed: Internal error",
         stdout=-1,
         stderr=-1,
     )
     # Second call: close
-    mock_exec.assert_any_call("gh", "issue", "close", "123", stdout=-1, stderr=-1)
+    mock_exec.assert_any_call(
+        "gh", "issue", "close", "123",
+        "--repo", "owner/repo",
+        stdout=-1,
+        stderr=-1
+    )
 
 
 @pytest.mark.asyncio
@@ -361,6 +377,8 @@ async def test_deliver_result_max_turns(github_channel):
         "issue",
         "comment",
         "123",
+        "--repo",
+        "owner/repo",
         "--body",
         "🤖 Hit turn limit",
         stdout=-1,
@@ -387,13 +405,20 @@ async def test_deliver_result_completed(github_channel):
         "issue",
         "comment",
         "123",
+        "--repo",
+        "owner/repo",
         "--body",
         "✅ Completed — Fixed everything",
         stdout=-1,
         stderr=-1,
     )
     # Second call: close
-    mock_exec.assert_any_call("gh", "issue", "close", "123", stdout=-1, stderr=-1)
+    mock_exec.assert_any_call(
+        "gh", "issue", "close", "123",
+        "--repo", "owner/repo",
+        stdout=-1,
+        stderr=-1
+    )
 
 
 @pytest.mark.asyncio
@@ -528,7 +553,9 @@ async def test_github_channel_is_valid_open_with_label(github_channel):
 
     assert valid is True
     mock_exec.assert_called_once_with(
-        "gh", "issue", "view", "123", "--json", "state,labels",
+        "gh", "issue", "view", "123",
+        "--repo", "owner/repo",
+        "--json", "state,labels",
         stdout=-1, stderr=-1
     )
 

@@ -76,7 +76,9 @@ class GitHubChannel(ChannelAdapter):
             body = f"✅ Completed — {text}"
 
         proc = await asyncio.create_subprocess_exec(
-            "gh", "issue", "comment", issue_number, "--body", body,
+            "gh", "issue", "comment", issue_number,
+            "--repo", self.settings.github_repo,
+            "--body", body,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
@@ -89,6 +91,7 @@ class GitHubChannel(ChannelAdapter):
         if status != "max_turns":
             proc = await asyncio.create_subprocess_exec(
                 "gh", "issue", "close", issue_number,
+                "--repo", self.settings.github_repo,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
@@ -100,7 +103,9 @@ class GitHubChannel(ChannelAdapter):
         issue_number = task_id.split("-", 1)[1]
         body = f"❌ Failed: {error}"
         proc = await asyncio.create_subprocess_exec(
-            "gh", "issue", "comment", issue_number, "--body", body,
+            "gh", "issue", "comment", issue_number,
+            "--repo", self.settings.github_repo,
+            "--body", body,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
@@ -112,6 +117,7 @@ class GitHubChannel(ChannelAdapter):
         # Close the issue on failure so it's not retried on restart
         proc = await asyncio.create_subprocess_exec(
             "gh", "issue", "close", issue_number,
+            "--repo", self.settings.github_repo,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
@@ -123,7 +129,9 @@ class GitHubChannel(ChannelAdapter):
         """Check if the issue is still open with the agent-task label."""
         issue_number = task_id.split("-", 1)[1]
         proc = await asyncio.create_subprocess_exec(
-            "gh", "issue", "view", issue_number, "--json", "state,labels",
+            "gh", "issue", "view", issue_number,
+            "--repo", self.settings.github_repo,
+            "--json", "state,labels",
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
@@ -220,6 +228,7 @@ class GitHubChannel(ChannelAdapter):
             # Post "Working" comment
             proc = await asyncio.create_subprocess_exec(
                 "gh", "issue", "comment", str(issue["number"]),
+                "--repo", self.settings.github_repo,
                 "--body", "🤖 Working on this issue...",
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
@@ -288,6 +297,7 @@ class GitHubChannel(ChannelAdapter):
             if task_id not in self.task_runner._processing:
                 proc = await asyncio.create_subprocess_exec(
                     "gh", "issue", "comment", str(issue["number"]),
+                    "--repo", self.settings.github_repo,
                     "--body", "🤖 Working on this issue...",
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE,
