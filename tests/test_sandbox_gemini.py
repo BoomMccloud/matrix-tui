@@ -187,6 +187,32 @@ async def test_validate_work_passes_when_all_checks_succeed(settings):
 
 
 @pytest.mark.asyncio
+async def test_validate_work_pre_push_skips_pr_checks(settings):
+    """validate_work(pre_push=True) returns True even if PR files are missing."""
+    sandbox = _make_sandbox(settings)
+    container_name = "sandbox-gh-pre-push"
+    sandbox._containers = {"gh-pre-push": container_name}
+
+    # Create only file manifest
+    ipc_dir = os.path.join(settings.ipc_base_dir, container_name)
+    os.makedirs(ipc_dir, exist_ok=True)
+    with open(os.path.join(ipc_dir, "changed-files.txt"), "w") as f:
+        f.write("fix.py\n")
+
+    async def mock_exec(chat_id, cmd):
+        if "git diff --name-only" in cmd:
+            return (0, "fix.py\n", "")
+        return (0, "all passed\n", "")
+
+    sandbox.exec = mock_exec
+    # No pr-url.txt or acceptance-criteria.md — but pre_push=True
+    passed, failures = await sandbox.validate_work("gh-pre-push", "repo", pre_push=True)
+
+    assert passed is True
+    assert failures == []
+
+
+@pytest.mark.asyncio
 async def test_validate_work_fails_when_tests_fail(settings):
     """validate_work returns failure when tests exit non-zero."""
     sandbox = _make_sandbox(settings)
@@ -264,6 +290,25 @@ async def test_validate_work_fails_when_acceptance_criteria_missing(settings):
 
     assert passed is False
     assert any("acceptance" in f.lower() or "criteria" in f.lower() for f in failures)
+
+
+@pytest.mark.asyncio
+async def test_validate_work_fails_when_no_changes_committed(settings):
+    """validate_work returns failure when no changes are detected on the feature branch."""
+    sandbox = _make_sandbox(settings)
+    container_name = "sandbox-gh-no-changes"
+    sandbox._containers = {"gh-nc": container_name}
+
+    async def mock_exec(chat_id, cmd):
+        if "git diff --name-only" in cmd:
+            return (0, "no commits\n", "")
+        return (0, "ok\n", "")
+
+    sandbox.exec = mock_exec
+    passed, failures = await sandbox.validate_work("gh-nc", "repo")
+
+    assert passed is False
+    assert any("no changes were committed" in f.lower() for f in failures)
 
 
 @pytest.mark.asyncio

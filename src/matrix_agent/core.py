@@ -4,7 +4,7 @@ import asyncio
 import logging
 import re
 import time
-from .sandbox import SandboxManager, check_forbidden
+from .sandbox import SandboxManager
 from .decider import Decider
 from .channels import ChannelAdapter
 
@@ -173,7 +173,6 @@ class TaskRunner:
 
         # Run Gemini with retries
         max_retries = 2
-        best_pr_url = None  # Track PR URL across attempts
         for attempt in range(max_retries + 1):
             rc, stdout, _ = await self.sandbox.run_gemini_session(
                 task_id, prompt, send_update, repo_name,
@@ -190,22 +189,11 @@ class TaskRunner:
                 )
                 return
 
-            # Host-controlled push: strip forbidden files, push, create PR
-            pr_url, push_error = await self._host_push(
-                task_id, repo_path, repo_full, is_ci_fix,
-            )
-            if pr_url:
-                best_pr_url = pr_url
+            # Validate (tests, scope) locally before push
+            passed, failures = await self.sandbox.validate_work(task_id, repo_name, pre_push=True)
 
-            # Validate (tests, scope, acceptance criteria)
-            passed, failures = await self.sandbox.validate_work(task_id, repo_name)
-            if push_error:
-                failures.append(push_error)
-
-            if passed and pr_url:
-                logger.info("[%s] GitHub pipeline succeeded: %s", task_id[:20], pr_url)
-                await channel.deliver_result(task_id, f"PR created: {pr_url}")
-                return
+            if passed:
+                break
 
             if attempt < max_retries:
                 # Re-launch with feedback
@@ -220,28 +208,28 @@ class TaskRunner:
                                task_id[:20], attempt + 1, max_retries + 1,
                                "; ".join(failures))
             else:
-                # Final failure — but check if a PR was created in an earlier attempt
-                if best_pr_url:
-                    logger.warning("[%s] Validation failed but PR exists: %s",
-                                   task_id[:20], best_pr_url)
-                    failure_text = "\n".join(f"- {f}" for f in failures)
-                    await channel.deliver_result(
-                        task_id,
-                        f"PR created but validation has issues: {best_pr_url}\n\n"
-                        f"Issues:\n{failure_text}",
-                    )
-                else:
-                    failure_text = "\n".join(f"- {f}" for f in failures)
-                    await channel.deliver_error(
-                        task_id,
-                        f"Failed after {max_retries + 1} attempts. Issues:\n{failure_text}",
-                    )
+                # Final failure
+                failure_text = "\n".join(f"- {f}" for f in failures)
+                await channel.deliver_error(
+                    task_id,
+                    f"Failed after {max_retries + 1} attempts. Issues:\n{failure_text}",
+                )
                 return
+
+        # Host-controlled push: push branch, create PR
+        pr_url, push_error = await self._host_push(
+            task_id, repo_path, repo_full, is_ci_fix,
+        )
+        if pr_url:
+            logger.info("[%s] GitHub pipeline succeeded: %s", task_id[:20], pr_url)
+            await channel.deliver_result(task_id, f"PR created: {pr_url}")
+        else:
+            await channel.deliver_error(task_id, f"Push failed: {push_error}")
 
     async def _host_push(
         self, task_id: str, repo_path: str, repo_full: str, is_ci_fix: bool,
     ) -> tuple[str | None, str | None]:
-        """Host-controlled push: strip forbidden files, push branch, create PR.
+        """Host-controlled push: push branch, create PR.
 
         Returns (pr_url, error_reason). error_reason is None on success.
         """
@@ -258,31 +246,7 @@ class TaskRunner:
                 "Do NOT commit on main."
             )
 
-        # 2. Check for forbidden files in the diff
-        rc, stdout, _ = await self.sandbox.exec(
-            task_id,
-            f"cd {repo_path} && "
-            "base=$(git merge-base HEAD origin/main 2>/dev/null || "
-            "git merge-base HEAD origin/master 2>/dev/null || echo HEAD~1) && "
-            "git diff --name-only $base HEAD",
-        )
-        changed = [f.strip() for f in stdout.splitlines() if f.strip()]
-        forbidden = check_forbidden(changed)
-
-        # 3. Strip forbidden files from commit if any
-        if forbidden:
-            logger.warning("[%s] Stripping forbidden files from commit: %s",
-                           task_id[:20], ", ".join(forbidden))
-            escaped = " ".join(f"'{f}'" for f in forbidden)
-            await self.sandbox.exec(
-                task_id,
-                f"cd {repo_path} && "
-                f"git checkout origin/main -- {escaped} 2>/dev/null || "
-                f"git checkout origin/master -- {escaped} && "
-                f"git commit --amend --no-edit",
-            )
-
-        # 4. Push
+        # 2. Push
         if is_ci_fix:
             push_cmd = f"cd {repo_path} && git push --force origin {branch}"
         else:
@@ -292,7 +256,7 @@ class TaskRunner:
             logger.error("[%s] Push failed: %s", task_id[:20], push_err)
             return None, f"git push failed: {push_err.strip()}"
 
-        # 5. Create PR (or get existing PR URL for CI fixes)
+        # 3. Create PR (or get existing PR URL for CI fixes)
         if is_ci_fix:
             rc, pr_url_out, _ = await self.sandbox.exec(
                 task_id,
@@ -318,7 +282,7 @@ class TaskRunner:
             logger.error("[%s] Failed to get PR URL: %s", task_id[:20], pr_url_out)
             return None, f"Failed to create PR: {pr_url_out.strip()}"
 
-        # 6. Write PR URL to IPC
+        # 4. Write PR URL to IPC
         self.sandbox.write_ipc_file(task_id, "pr-url.txt", pr_url)
         logger.info("[%s] Host pushed %s and created PR: %s", task_id[:20], branch, pr_url)
         return pr_url, None
