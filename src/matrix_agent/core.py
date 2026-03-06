@@ -306,6 +306,20 @@ class TaskRunner:
         if self.sandbox.has_container(task_id):
             await self.sandbox.destroy(task_id)
 
+    async def shutdown(self) -> None:
+        """Cancel all workers and destroy all containers."""
+        logger.info("TaskRunner: shutting down, cancelling %d workers", len(self._workers))
+        for task_id, worker in list(self._workers.items()):
+            worker.cancel()
+        await asyncio.gather(*self._workers.values(), return_exceptions=True)
+        
+        # Cleanup all tasks (destroys containers)
+        for task_id in list(self._channels):
+            await self._cleanup(task_id)
+
+        self.sandbox.save_state()
+        logger.info("TaskRunner: shutdown complete")
+
     async def reconcile_loop(self) -> None:
         """Run reconcile every 60s."""
         while True:
