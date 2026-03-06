@@ -316,6 +316,8 @@ class TaskRunner:
         # Cleanup all tasks (destroys containers)
         for task_id in list(self._channels):
             await self._cleanup(task_id)
+
+        self.sandbox.save_state()
         logger.info("TaskRunner: shutdown complete")
 
     async def reconcile_loop(self) -> None:

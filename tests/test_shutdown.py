@@ -35,6 +35,7 @@ def _make_sandbox():
 
     sandbox.create = AsyncMock(side_effect=fake_create)
     sandbox.destroy = AsyncMock()
+    sandbox.save_state = MagicMock()
     sandbox.has_container = MagicMock(side_effect=lambda cid: cid in sandbox._containers)
     sandbox.container_ids = MagicMock(side_effect=lambda: list(sandbox._containers))
     return sandbox
@@ -81,3 +82,6 @@ async def test_task_runner_shutdown():
     assert sandbox.destroy.call_count == 2
     sandbox.destroy.assert_any_call("task-1")
     sandbox.destroy.assert_any_call("task-2")
+
+    # Verify state is saved
+    assert sandbox.save_state.called

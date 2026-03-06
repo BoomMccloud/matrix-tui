@@ -46,13 +46,13 @@ async def main():
 
     shutdown_event = asyncio.Event()
 
-    def handle_signal():
+    def handle_sigterm():
         logging.info("Received shutdown signal")
         shutdown_event.set()
 
     loop = asyncio.get_running_loop()
-    for sig in (signal.SIGTERM, signal.SIGINT):
-        loop.add_signal_handler(sig, handle_signal)
+    loop.add_signal_handler(signal.SIGTERM, handle_sigterm)
+    loop.add_signal_handler(signal.SIGINT, handle_sigterm)
 
     # Run bot until signal
     bot_task = asyncio.create_task(bot.run())
