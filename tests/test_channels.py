@@ -398,7 +398,7 @@ async def test_deliver_result_completed(github_channel):
 
 @pytest.mark.asyncio
 async def test_recover_tasks_returns_open_issues(github_channel):
-    """recover_tasks() returns (task_id, message) pairs for open agent-task issues."""
+    """recover_tasks() returns (task_id, message) pairs and posts recovery comments."""
     gh_output = json.dumps(
         [
             {"number": 10, "title": "Fix bug", "body": "Details here"},
@@ -412,12 +412,55 @@ async def test_recover_tasks_returns_open_issues(github_channel):
 
     with patch(
         "matrix_agent.channels.asyncio.create_subprocess_exec", return_value=mock_proc
-    ):
+    ) as mock_exec:
         results = await github_channel.recover_tasks()
 
     assert len(results) == 2
     assert results[0] == ("gh-10", "Repository: owner/repo\n\n# Fix bug\n\nDetails here")
     assert results[1] == ("gh-11", "Repository: owner/repo\n\n# Add feature\n\nMore details")
+
+    # Verify gh issue list call
+    mock_exec.assert_any_call(
+        "gh",
+        "issue",
+        "list",
+        "--repo",
+        "owner/repo",
+        "--label",
+        "agent-task",
+        "--state",
+        "open",
+        "--json",
+        "number,title,body",
+        stdout=-1,
+        stderr=-1,
+    )
+
+    # Verify gh issue comment calls
+    mock_exec.assert_any_call(
+        "gh",
+        "issue",
+        "comment",
+        "10",
+        "--repo",
+        "owner/repo",
+        "--body",
+        "🤖 Bot restarted — resuming work on this issue.",
+        stdout=-1,
+        stderr=-1,
+    )
+    mock_exec.assert_any_call(
+        "gh",
+        "issue",
+        "comment",
+        "11",
+        "--repo",
+        "owner/repo",
+        "--body",
+        "🤖 Bot restarted — resuming work on this issue.",
+        stdout=-1,
+        stderr=-1,
+    )
 
 
 @pytest.mark.asyncio
@@ -432,8 +475,28 @@ async def test_recover_tasks_skips_when_no_repo():
     )
     channel = GitHubChannel(task_runner=task_runner, settings=settings)
 
-    results = await channel.recover_tasks()
+    with patch("matrix_agent.channels.asyncio.create_subprocess_exec") as mock_exec:
+        results = await channel.recover_tasks()
+
     assert results == []
+    mock_exec.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_recover_tasks_list_fails(github_channel):
+    """recover_tasks() returns empty list if gh issue list fails."""
+    mock_proc = MagicMock()
+    mock_proc.returncode = 1
+    mock_proc.communicate = AsyncMock(return_value=(b"", b"error message"))
+
+    with patch(
+        "matrix_agent.channels.asyncio.create_subprocess_exec", return_value=mock_proc
+    ) as mock_exec:
+        results = await github_channel.recover_tasks()
+
+    assert results == []
+    # Verify only list call was made, no comments
+    assert mock_exec.call_count == 1
 
 
 @pytest.mark.asyncio
