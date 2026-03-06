@@ -26,6 +26,7 @@ async def github_channel():
         github_webhook_port=0,
         github_webhook_secret="test-secret",
         github_token="ghp_fake",
+        github_repo="owner/repo",
     )
     channel = GitHubChannel(task_runner=task_runner, settings=settings)
     yield channel
