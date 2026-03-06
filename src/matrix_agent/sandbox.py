@@ -470,7 +470,7 @@ class SandboxManager:
             f.write(content)
 
     async def validate_work(
-        self, chat_id: str, repo_name: str,
+        self, chat_id: str, repo_name: str, pre_push: bool = False,
     ) -> tuple[bool, list[str]]:
         """Host-side validation after Gemini exits.
 
@@ -511,8 +511,11 @@ class SandboxManager:
             "base=$(git merge-base HEAD origin/main 2>/dev/null || git merge-base HEAD origin/master 2>/dev/null || echo HEAD~1) && "
             "git diff --name-only $base HEAD 2>/dev/null || echo 'no commits'",
         )
-        if stdout.strip() and stdout.strip() != "no commits":
-            changed_files = [f.strip() for f in stdout.strip().splitlines() if f.strip()]
+        changed_files = [f.strip() for f in stdout.strip().splitlines() if f.strip() and f.strip() != "no commits"]
+        
+        if not changed_files:
+            failures.append("No changes were committed. You must commit your work to the feature branch.")
+        else:
             log.info("[%s] Scope: %d files changed: %s", chat_id[:20], len(changed_files), ", ".join(changed_files))
 
             # Check file manifest — declared scope
@@ -553,8 +556,8 @@ class SandboxManager:
                     f"Do NOT modify these files."
                 )
 
-        # 3. Check pr-url.txt exists
-        if ipc_host:
+        # 3. Check pr-url.txt exists (only if not pre_push)
+        if not pre_push and ipc_host:
             pr_url_path = os.path.join(ipc_host, "pr-url.txt")
             if not os.path.exists(pr_url_path):
                 failures.append("No PR created (pr-url.txt missing)")

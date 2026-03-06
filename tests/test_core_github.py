@@ -585,8 +585,8 @@ async def test_process_github_branch_creation_total_failure(settings):
 
 
 @pytest.mark.asyncio
-async def test_host_push_strips_forbidden_files(settings):
-    """_host_push strips forbidden files from commit before pushing."""
+async def test_host_push_basic(settings):
+    """_host_push pushes branch and returns PR URL."""
     mocker = SubprocessMocker()
     _setup_default_subprocess(mocker, None)
     runner, sandbox = _make_runner(settings, mocker)
@@ -600,8 +600,6 @@ async def test_host_push_strips_forbidden_files(settings):
         exec_cmds.append(cmd)
         if "git rev-parse --abbrev-ref HEAD" in cmd:
             return (0, "agent/fix-30\n", "")
-        if "git diff --name-only" in cmd:
-            return (0, "fix.py\npyproject.toml\nuv.lock\n", "")
         if "git push" in cmd:
             return (0, "", "")
         if "gh pr create" in cmd or "gh pr view" in cmd:
@@ -616,9 +614,38 @@ async def test_host_push_strips_forbidden_files(settings):
 
     assert pr_url == "https://github.com/owner/repo/pull/30"
     assert error is None
-    # Should have called git checkout to strip forbidden files
-    strip_cmds = [c for c in exec_cmds if "git checkout" in c and "pyproject.toml" in c]
-    assert len(strip_cmds) >= 1
+    # Pushed?
+    assert any("git push" in c for c in exec_cmds)
+
+
+@pytest.mark.asyncio
+async def test_host_push_no_longer_strips_forbidden_files(settings):
+    """_host_push should not call git checkout to strip files (now validate_work's job)."""
+    mocker = SubprocessMocker()
+    _setup_default_subprocess(mocker, None)
+    runner, sandbox = _make_runner(settings, mocker)
+
+    exec_cmds = []
+
+    async def mock_exec(chat_id, cmd):
+        exec_cmds.append(cmd)
+        if "git rev-parse --abbrev-ref HEAD" in cmd:
+            return (0, "agent/fix-33\n", "")
+        if "git push" in cmd:
+            return (0, "", "")
+        if "gh pr create" in cmd:
+            return (0, "https://github.com/owner/repo/pull/33\n", "")
+        return (0, "", "")
+
+    sandbox.exec = mock_exec
+    sandbox._containers = {"gh-33": "sandbox-gh-33"}
+
+    with patch("asyncio.create_subprocess_exec", mocker):
+        await runner._host_push("gh-33", "/workspace/repo", "owner/repo", False)
+
+    # Should NOT have called git checkout or git commit --amend
+    assert not any("git checkout origin" in c for c in exec_cmds)
+    assert not any("git commit --amend" in c for c in exec_cmds)
 
 
 @pytest.mark.asyncio
