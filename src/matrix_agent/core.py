@@ -257,30 +257,25 @@ class TaskRunner:
             return None, f"git push failed: {push_err.strip()}"
 
         # 3. Create PR (or get existing PR URL for CI fixes)
-        if is_ci_fix:
-            rc, pr_url_out, _ = await self.sandbox.exec(
-                task_id,
-                f"cd {repo_path} && gh pr view {branch} --json url -q .url",
-            )
-        else:
+        if not is_ci_fix:
             issue_num = task_id.replace("gh-", "").split("-")[0]
-            rc, pr_url_out, _ = await self.sandbox.exec(
+            await self.sandbox.exec(
                 task_id,
                 f"cd {repo_path} && "
                 f"gh pr create --title 'Fix #{issue_num}' "
-                f"--body 'Closes #{issue_num}' --head {branch} 2>&1 || "
-                f"gh pr view {branch} --json url -q .url",
+                f"--body 'Closes #{issue_num}' --head {branch}",
             )
-        # Extract first URL from output (gh pr create may include extra text)
-        pr_url = None
-        for line in pr_url_out.splitlines():
-            line = line.strip()
-            if line.startswith("http"):
-                pr_url = line
-                break
-        if not pr_url:
-            logger.error("[%s] Failed to get PR URL: %s", task_id[:20], pr_url_out)
-            return None, f"Failed to create PR: {pr_url_out.strip()}"
+            # Ignore rc — pr create fails if PR already exists, which is fine
+
+        # Always fetch the URL cleanly via gh pr view (works for new and existing PRs)
+        rc, pr_url_out, _ = await self.sandbox.exec(
+            task_id,
+            f"cd {repo_path} && gh pr view {branch} --json url -q .url",
+        )
+        pr_url = pr_url_out.strip()
+        if not pr_url.startswith("http"):
+            logger.error("[%s] Failed to get PR URL: rc=%d out=%r", task_id[:20], rc, pr_url_out)
+            return None, f"Failed to get PR URL (rc={rc}): {pr_url_out.strip()}"
 
         # 4. Write PR URL to IPC
         self.sandbox.write_ipc_file(task_id, "pr-url.txt", pr_url)
