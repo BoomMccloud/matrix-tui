@@ -1,13 +1,38 @@
+# Python
 __pycache__/
 *.pyc
+*.pyo
+*.pyd
 .venv/
 *.egg-info/
 dist/
+build/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# Environment & State
 .env
 state.json
+.claude/
 
+# IPC artifacts (written by Gemini inside container)
 .test-ipc/
+**/pr-url.txt
+**/acceptance-criteria.md
+**/changed-files.txt
+**/event-result.json
 
-# IPC artifacts (written by Gemini inside container, should never be committed)
-/pr-url.txt
-/acceptance-criteria.md
+# OS & IDE
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+*.log
+
+# Project specific
+.python-version
+node_modules/
